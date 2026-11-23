@@ -6,7 +6,7 @@ import json
 import sqlite3
 import sys
 from collections import deque
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,6 +18,7 @@ from .config import AppConfig, StorageConfig, load_config, redact_url, resolve_s
 from .events import ActivityTimeline, FallDetector, GaitAnalyzer, InactivityDetector
 from .features import FeatureExtractor
 from .sources import VideoSource
+from .tracking import PresenceTracker, TrackingConfig
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
 BANNER = "Simulated or test data - personal learning project, not a medical device"
@@ -36,6 +37,7 @@ class Config:
     hr_min_quality: float = 0.35
     br_min_quality: float = 0.35
     data_label: str = "test"   # "test" | "simulated"
+    tracking: Optional[TrackingConfig] = field(default_factory=TrackingConfig)  # None disables
 
 
 class _ClipBuffer:
@@ -97,6 +99,8 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
     hr = HeartRateEstimator(min_quality=cfg.hr_min_quality, still_motion=cfg.still_motion)
     br = BreathingRateEstimator(min_quality=cfg.br_min_quality, still_motion=cfg.still_motion)
     buf = _ClipBuffer(cfg.clip_buffer_s)
+    tracker = PresenceTracker(cfg.tracking) if cfg.tracking else None
+    s = None
 
     events, postures = [], []
     last_t = 0.0
@@ -104,17 +108,29 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         if feats is None:
             feats = FeatureExtractor(aspect=fr.image.shape[1] / fr.image.shape[0])
         lm = pose_provider.process(fr.image, fr.t)
-        s = feats.update(fr.t, lm)
+        held = False
+        if tracker is not None:
+            lm, held = tracker.update(fr.t, lm, fr.image.shape[1] / fr.image.shape[0])
+        if held and s is not None:
+            # Bridged dropout: carry forward the last *measured* state (incl. its motion) so a
+            # held pose never counts as stillness; only the timestamp advances.
+            s = replace(s, t=fr.t)
+        else:
+            s = feats.update(fr.t, lm)
         buf.add(fr.t, fr.image)
         timeline.update(s)
-        gait.update(s)
-        hr.update(fr.t, fr.image, s)
-        br.update(fr.t, fr.image, s)
+        if held:   # held poses are not measurements: reset vitals as an absent frame did pre-tracker
+            hr._reset()
+            br._reset()
+        else:
+            gait.update(s)
+            hr.update(fr.t, fr.image, s)
+            br.update(fr.t, fr.image, s)
         if fr.index % max(1, int(src.fps)) == 0:
             postures.append({"t": round(fr.t, 1), "posture": s.posture,
                              "motion": round(s.motion, 3)})
         for det in (fall, inact):
-            ev = det.update(s)
+            ev = det.update(s, held=True) if (held and det is fall) else det.update(s)
             if ev:
                 name = f"{clip_name}_{ev.kind}_{int(ev.t_onset)}s.mp4"
                 ev.clip = buf.write(out / "clips" / name, ev.t_onset - cfg.clip_pre_s,

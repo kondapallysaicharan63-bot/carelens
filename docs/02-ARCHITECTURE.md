@@ -41,6 +41,7 @@ caregiver alerting (LAN-local).
 |--------|------|----------------|
 | Sources | `carelens/sources.py` | Open file/USB/CSI/RTSP, yield timestamped, resized frames |
 | Pose | `carelens/pose.py` | `PoseProvider` protocol; MediaPipe + scripted (test) impls |
+| Tracking | `carelens/tracking.py` | Single-person presence debounce, <=0.5 s dropout hold, One Euro keypoint smoothing (`Config.tracking=None` disables). Held frames carry forward the last measured state (motion included, so no fake stillness) and are kept out of the vitals windows. Centroid-jump reset is a heuristic, not identity tracking |
 | Features | `carelens/features.py` | Per-frame posture, motion, angle, hip position |
 | Events | `carelens/events.py` | Fall, inactivity, timeline, gait |
 | Vitals | `carelens/vitals.py` | rPPG heart rate, breathing; shared signal core |

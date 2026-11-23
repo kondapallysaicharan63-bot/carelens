@@ -61,19 +61,23 @@ class FallDetector:
                         "drop_time_s": round(dt, 2)}
         return None
 
-    def update(self, s: BodyState) -> Optional[Event]:
-        if s.present:
+    def update(self, s: BodyState, held: bool = False) -> Optional[Event]:
+        """held=True: `s` is a carried-forward state (pose dropout bridged by the tracker).
+        It is not a measurement, so it never enters the drop history or triggers a drop;
+        its carried motion still feeds the stillness timer."""
+        if s.present and not held:
             self._hist.append((s.t, s.torso_angle, s.hip_y, s.extent))
         while self._hist and self._hist[0][0] < s.t - self.drop_window_s:
             self._hist.popleft()
 
-        if s.present and s.torso_angle < self.upright_deg and s.posture in ("standing", "walking"):
+        if (s.present and not held and s.torso_angle < self.upright_deg
+                and s.posture in ("standing", "walking")):
             if self._pending is not None:
                 self._pending = None   # recovered
             self._armed = True
 
         if self._pending is None:
-            if self._armed and s.present:
+            if self._armed and s.present and not held:
                 info = self._sudden_drop(s)
                 if info:
                     self._pending = {"t_onset": s.t, "still_start": s.t, "info": info}
