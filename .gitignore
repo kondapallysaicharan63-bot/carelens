@@ -1,0 +1,16 @@
+# Generated output and recorded footage — never commit real footage to a public repo
+output/
+!output/.gitkeep
+recordings/
+*.mp4
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Misc
+*.zip
+cli_err.log
+.env
+.DS_Store

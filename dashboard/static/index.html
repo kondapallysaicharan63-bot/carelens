@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room wellness monitor</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2430; --muted:#6b7480; --line:#e3e6ea;
+          --sit:#5b8def; --stand:#3fb68b; --walk:#f0a540; --lie:#d9534f; --absent:#c8ccd2; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
+  .banner { background:#fff4d6; border-bottom:1px solid #f0d58a; padding:10px 20px; font-weight:600; }
+  header { display:flex; align-items:center; gap:16px; padding:16px 20px 4px; flex-wrap:wrap; }
+  h1 { font-size:20px; margin:0; }
+  select { font:inherit; padding:4px 8px; }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; padding:16px 20px 32px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card h2 { font-size:14px; margin:0 0 10px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .wide { grid-column:1/-1; }
+  .stat { font-size:28px; font-weight:700; }
+  .sub { color:var(--muted); font-size:12px; }
+  .ev { border-left:4px solid var(--lie); padding:6px 10px; margin:8px 0; background:#fbfbfc; }
+  .ev.inactivity { border-color:var(--walk); }
+  .legend span { display:inline-flex; align-items:center; gap:4px; margin-right:12px; font-size:12px; }
+  .legend i { width:10px; height:10px; display:inline-block; border-radius:2px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  td, th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; }
+  svg text { font-size:10px; fill:var(--muted); }
+  video { width:100%; max-width:360px; margin-top:6px; border-radius:6px; }
+</style>
+</head>
+<body>
+<div class="banner" id="banner">Simulated or test data</div>
+<header><h1>Room wellness monitor</h1><select id="run"></select>
+  <span class="sub">Wellness trends only, not a diagnosis.</span></header>
+<main>
+  <section class="card wide"><h2>Posture over the clip</h2><div id="track"></div>
+    <div class="legend" id="legend"></div></section>
+  <section class="card"><h2>Events</h2><div id="events"></div></section>
+  <section class="card"><h2>Heart rate (camera estimate)</h2><div id="hrstat"></div><div id="hr"></div></section>
+  <section class="card"><h2>Breathing rate (camera estimate)</h2><div id="brstat"></div><div id="br"></div></section>
+  <section class="card"><h2>Time by posture per hour</h2><div id="timeline"></div></section>
+  <section class="card"><h2>Walking (approximate)</h2><div id="gait"></div></section>
+  <section class="card wide"><h2>Trend across recordings</h2><div id="history"></div></section>
+</main>
+<script>
+const COLORS = {sitting:'var(--sit)', standing:'var(--stand)', walking:'var(--walk)', lying:'var(--lie)', absent:'var(--absent)'};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (s) => { s = Math.round(s); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; };
+
+function lineChart(points, {lo, hi, unit, w=420, h=150}) {
+  if (!points.length) return '<p class="sub">No estimates in this recording.</p>';
+  const t0 = points[0].t, t1 = Math.max(points[points.length-1].t, t0 + 1);
+  const X = t => 34 + (t - t0) / (t1 - t0) * (w - 44), Y = v => h - 20 - (v - lo) / (hi - lo) * (h - 30);
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%">`;
+  for (const g of [lo, (lo+hi)/2, hi]) svg += `<line x1="34" x2="${w-10}" y1="${Y(g)}" y2="${Y(g)}" stroke="#eee"/><text x="2" y="${Y(g)+3}">${g}</text>`;
+  for (const p of points) {
+    const v = Math.min(hi, Math.max(lo, p.value));
+    svg += `<circle cx="${X(p.t)}" cy="${Y(v)}" r="${p.reported ? 3 : 2}" fill="${p.reported ? 'var(--ink)' : 'none'}" stroke="${p.reported ? 'none' : '#bbb'}"><title>t=${fmt(p.t)}  ${p.value} ${unit}  quality ${p.quality}</title></circle>`;
+  }
+  svg += `<text x="34" y="${h-4}">${fmt(t0)}</text><text x="${w-40}" y="${h-4}">${fmt(t1)}</text></svg>`;
+  return svg + '<div class="sub">Filled dots: quality above threshold (reported). Hollow: low quality, not reported.</div>';
+}
+
+function statBlock(s, unit) {
+  return s.median == null ? `<div class="stat">—</div><div class="sub">No good-quality window (${s.n_windows} tried)</div>`
+    : `<div class="stat">${s.median} <span class="sub">${unit}</span></div><div class="sub">median of ${s.n_reported}/${s.n_windows} windows · mean quality ${s.mean_quality}</div>`;
+}
+
+async function load(name) {
+  const r = await (await fetch(`/api/run/${encodeURIComponent(name)}`)).json();
+  document.getElementById('banner').textContent = `${r.banner} · data: ${r.data_label} · source: ${r.source}`;
+  // posture track
+  const tr = r.posture_track, w = 900, h = 40, dur = Math.max(r.duration_s, 1);
+  let svg = `<svg viewBox="0 0 ${w} ${h+14}" width="100%">`;
+  tr.forEach((p, i) => { const t1 = i+1 < tr.length ? tr[i+1].t : r.duration_s;
+    svg += `<rect x="${p.t/dur*w}" y="0" width="${Math.max(1,(t1-p.t)/dur*w)}" height="${h}" fill="${COLORS[p.posture]}"><title>${fmt(p.t)} ${p.posture}</title></rect>`; });
+  for (const e of r.events) svg += `<line x1="${e.t_onset/dur*w}" x2="${e.t_onset/dur*w}" y1="0" y2="${h}" stroke="#000" stroke-width="2"/>`;
+  svg += `<text x="0" y="${h+12}">0:00</text><text x="${w-30}" y="${h+12}">${fmt(dur)}</text></svg>`;
+  document.getElementById('track').innerHTML = svg;
+  document.getElementById('legend').innerHTML = Object.entries(COLORS).map(([k,c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('') + '<span>| black line = event</span>';
+  // events
+  document.getElementById('events').innerHTML = r.events.length ? r.events.map(e =>
+    `<div class="ev ${e.kind}"><b>${e.kind === 'fall' ? 'Possible fall' : 'Inactivity'}</b> at ${fmt(e.t_onset)} (confirmed ${fmt(e.t_confirmed)})<br>${esc(e.message)}
+     ${e.clip ? `<br><video src="/clips/${encodeURIComponent(e.clip)}" controls muted></video>` : ''}</div>`).join('')
+    : '<p class="sub">No events in this recording.</p>';
+  document.getElementById('hrstat').innerHTML = statBlock(r.heart_rate.summary, 'bpm');
+  document.getElementById('hr').innerHTML = lineChart(r.heart_rate.windows, {lo:40, hi:140, unit:'bpm'});
+  document.getElementById('brstat').innerHTML = statBlock(r.breathing_rate.summary, '/min');
+  document.getElementById('br').innerHTML = lineChart(r.breathing_rate.windows, {lo:5, hi:30, unit:'/min'});
+  // timeline
+  const P = ['sitting','standing','walking','lying','absent'];
+  document.getElementById('timeline').innerHTML = '<table><tr><th>Hour</th>' + P.map(p => `<th>${p}</th>`).join('') + '</tr>' +
+    Object.entries(r.timeline_by_hour).map(([hr, v]) => `<tr><td>${esc(hr)}</td>` + P.map(p => `<td>${fmt(v[p]||0)}</td>`).join('') + '</tr>').join('') + '</table><div class="sub">minutes:seconds</div>';
+  document.getElementById('gait').innerHTML = r.gait_segments.length ? '<table><tr><th>Start</th><th>Duration</th><th>Speed (m/s, approx)</th><th>Trunk sway (°)</th></tr>' +
+    r.gait_segments.map(g => `<tr><td>${fmt(g.t_start)}</td><td>${g.duration_s}s</td><td>${g.speed_m_s_approx}</td><td>${g.trunk_sway_deg}</td></tr>`).join('') + '</table>'
+    : '<p class="sub">No walk of 2 s or longer detected.</p>';
+}
+
+async function loadHistory() {
+  const rows = await (await fetch('/api/history')).json();
+  document.getElementById('history').innerHTML = rows.length ? '<table><tr><th>Recording start</th><th>Clip</th><th>Data</th><th>HR median</th><th>BR median</th><th>Walk speed</th><th>Falls</th><th>Inactivity</th></tr>' +
+    rows.map(r => `<tr><td>${esc(r.start_time)}</td><td>${esc(r.clip)}</td><td>${esc(r.data_label)}</td><td>${r.hr_median ?? '—'}</td><td>${r.br_median ?? '—'}</td><td>${r.gait_speed ?? '—'}</td><td>${r.n_falls}</td><td>${r.n_inactivity}</td></tr>`).join('') + '</table>'
+    : '<p class="sub">No recordings yet.</p>';
+}
+
+(async () => {
+  const runs = await (await fetch('/api/runs')).json();
+  const sel = document.getElementById('run');
+  sel.innerHTML = runs.map(n => `<option>${esc(n)}</option>`).join('');
+  sel.onchange = () => load(sel.value);
+  if (runs.length) load(runs[runs.length - 1]);
+  loadHistory();
+})();
+</script>
+</body>
+</html>
