@@ -51,6 +51,8 @@ class CameraConfig(_Strict):
     person_height_m: float = Field(1.65, ge=0.5, le=2.5)
     enabled: bool = True
     thresholds: Optional[Thresholds] = None
+    rtsp_transport: Literal["tcp", "udp"] = "tcp"  # only used for rtsp sources
+    open_timeout_s: float = Field(10.0, gt=0, le=300)
 
     @model_validator(mode="after")
     def _check_source(self):

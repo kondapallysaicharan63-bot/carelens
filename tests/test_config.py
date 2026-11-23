@@ -152,3 +152,14 @@ def test_oriented_source_rotates_before_resize():
 
     fr = next(iter(OrientedSource(Fake(), 90, "x")))
     assert fr.image.shape[:2] == (1137, 640)
+
+
+def test_rtsp_transport_validation():
+    from carelens.config import CameraConfig
+    base = dict(id="c1", room="r", type="rtsp", source="rtsp://h/s")
+    assert CameraConfig(**base).rtsp_transport == "tcp"
+    assert CameraConfig(**base, rtsp_transport="udp").open_timeout_s == 10
+    with pytest.raises(Exception):
+        CameraConfig(**base, rtsp_transport="http")
+    with pytest.raises(Exception):
+        CameraConfig(**base, open_timeout_s=0)

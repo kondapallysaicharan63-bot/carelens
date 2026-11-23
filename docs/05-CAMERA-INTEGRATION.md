@@ -36,6 +36,15 @@ trade-offs. **Cloud-app cameras (Roku/Blink/Nest) are clip-export only** (see PR
 - Store camera configs in a small `config.yaml` (id, type, URL/index, label, location),
   credentials pulled from env — never inline.
 
+### ONVIF discovery
+
+`python -m carelens.discovery` sends a WS-Discovery Probe (UDP multicast 239.255.255.250:3702)
+and lists ONVIF cameras with a ready-to-paste `config.yaml` snippet. With `--stream-uri` it
+asks each camera's ONVIF Media service for its RTSP URI (WS-Security digest auth using
+`RTSP_USER`/`RTSP_PASS`); returned URIs are stripped of credentials. It is LAN-only: cloud-app
+cameras (Roku/Blink/Nest) do not appear and remain clip-export only. Cameras declare
+`rtsp_transport` (default `tcp`) and `open_timeout_s` (default 10).
+
 ## 4. Reliability requirements (live sources)
 
 The current `VideoSource` opens once and iterates. For live RTSP/Wi-Fi, add:

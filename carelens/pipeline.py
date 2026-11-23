@@ -220,7 +220,8 @@ def main(argv=None):
             raise SystemExit(f"error: {e.args[0] if isinstance(e, KeyError) else e}")
         label = redact_url(str(source))
         try:
-            vs = VideoSource(source, max_seconds=a.max_seconds, resize_width=None)
+            vs = VideoSource(source, max_seconds=a.max_seconds, resize_width=None,
+                             rtsp_transport=cam.rtsp_transport, open_timeout_s=cam.open_timeout_s)
         except IOError:
             pose.close()
             raise SystemExit(f"error: could not open camera {cam.id!r} ({label})")

@@ -95,6 +95,9 @@ The pipeline is source-agnostic; the camera is just one input. Supported paths:
 1. **USB webcam** (`--source 0`) — live video you fully control, best for development.
 2. **Any RTSP / ONVIF camera** (`--source "rtsp://user:pass@host:554/stream"`) — a
    first-class live source, wired (PoE) or wireless; ONVIF auto-discovery finds them on the LAN.
+   Find cameras with `python -m carelens.discovery [--timeout 3] [--stream-uri]` (ONVIF
+   WS-Discovery, LAN only); it prints `config.yaml` snippets (credentials via `RTSP_USER` /
+   `RTSP_PASS` in `.env`, never inline). Per-camera `rtsp_transport` (tcp/udp) and `open_timeout_s`.
 3. **NVIDIA Jetson + CSI or USB camera** (`--source "csi://0"`) — recommended for a live,
    self-contained on-device demo. See below.
 4. **Cloud-app cameras (Roku 360 SE, Blink, Nest) — exported clips only.** Download saved
