@@ -176,3 +176,11 @@ python -m carelens.pipeline --camera demo
 ```
 
 CLI flags (`--inactivity-min`, `--fall-still-s`, `--height-m`, `--out`) override the config.
+
+The `demo` camera points at the synthetic clip. Real MediaPipe does not detect the
+synthetic stick figure, so feed the generator's ground-truth poses (the run is always
+labelled *simulated*):
+
+```
+python -m carelens.pipeline --camera demo --inactivity-min 1 --truth-pose output/synthetic_demo.truth.json
+```

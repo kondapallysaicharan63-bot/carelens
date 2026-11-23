@@ -252,12 +252,19 @@ def main(argv=None):
     ap.add_argument("--fall-still-s", type=float, default=None)
     ap.add_argument("--height-m", type=float, default=None)
     ap.add_argument("--model", default=None, help="MediaPipe pose .task model path")
+    ap.add_argument("--truth-pose", default=None, metavar="TRUTH_JSON",
+                    help="synthetic clips only: use the generator's ground-truth poses instead of "
+                         "MediaPipe (run is always labelled 'simulated')")
     a = ap.parse_args(argv)
 
     from .store import Store
     from .pose import MediaPipePose, DEFAULT_MODEL
     start = datetime.fromisoformat(a.start) if a.start else datetime.now().replace(microsecond=0)
-    pose = MediaPipePose(a.model or DEFAULT_MODEL)  # before opening any camera, so a bad model leaks no stream
+    if a.truth_pose:
+        from .synth import Scenario
+        pose = Scenario.from_truth(a.truth_pose).provider()
+    else:
+        pose = MediaPipePose(a.model or DEFAULT_MODEL)  # before opening any camera, so a bad model leaks no stream
     cam = None
     if a.camera:
         base = Path(a.config).resolve().parent  # relative paths and .env are config-relative
@@ -286,6 +293,10 @@ def main(argv=None):
         ident = {"usb": "webcam"}.get(kind, kind)
         name = default_run_name(a.name, kind, ident, start, stem)
         camera_id = "default"
+    if a.truth_pose:
+        if cam is not None and cam.orientation:
+            raise SystemExit("error: --truth-pose cannot be combined with a rotated camera")
+        cfg = replace(cfg, data_label="simulated")  # ground-truth poses are never real footage
     try:  # before any camera is opened, so a bad database leaks no stream
         store = Store(Path(out) / storage.db_path)
     except (OSError, sqlite3.Error, RuntimeError) as e:

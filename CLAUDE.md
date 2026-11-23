@@ -9,7 +9,7 @@ device** and must never claim to be.
 - `dashboard/` — local Flask UI.
 - `tests/` — pytest suite.
 - `docs/` — the spec set. **Read `docs/07-BUILD-PLAN.md` to know what to do next.**
-  Start at phase **P1** (P0 is already built).
+  P0 and P1 are built; next is **P2**.
 
 ## How to work
 0. **Orchestrate, don't do everything yourself.** This session is the *coordinator*: dispatch
@@ -19,7 +19,10 @@ device** and must never claim to be.
 2. Keep `pytest -q` green after every change; add tests with each feature.
 3. Prefer editing existing modules over new ones; keep the `PoseProvider`/`VideoSource`
    interfaces stable — they're the seams for on-device swaps.
-4. Run the pipeline to sanity-check: `python -m carelens.pipeline --source output/synthetic_demo.mp4 --name check --inactivity-min 1` (regenerate the clip with `python -m carelens.synth` if needed).
+4. Run the pipeline to sanity-check: `python -m carelens.pipeline --camera demo --inactivity-min 1 --truth-pose output/synthetic_demo.truth.json`
+   (regenerate the clip with `python -m carelens.synth` if needed). `--truth-pose` feeds the generator's
+   ground-truth poses — real MediaPipe does not detect the synthetic stick figure. Runs land in
+   `output/carelens.db`; view them with `python dashboard/app.py`.
 
 ## Hard rules (do not violate)
 - **Wellness wording only** — "trend", "check-in suggested". Never "diagnosis".

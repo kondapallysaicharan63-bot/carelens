@@ -115,6 +115,14 @@ class Scenario:
     def provider(self) -> ScriptedPose:
         return ScriptedPose(self.pose_landmarks)
 
+    @classmethod
+    def from_truth(cls, path: str | Path) -> "Scenario":
+        """Rebuild a scenario from the ``.truth.json`` written next to a rendered clip."""
+        truth = json.loads(Path(path).read_text())
+        fields = Segment.__dataclass_fields__
+        segs = [Segment(**{k: v for k, v in seg.items() if k in fields}) for seg in truth["segments"]]
+        return cls(segs, hr_bpm=truth["hr_bpm"], br_bpm=truth["br_bpm"])
+
 
 def _shirt_texture(rng, size=220):
     tex = np.full((size, size, 3), (150, 90, 60), np.uint8)

@@ -17,23 +17,25 @@ breathing · pipeline · local dashboard · synthetic generator · tests.
 Acceptance: `pytest -q` green; `python -m carelens.pipeline --source output/synthetic_demo.mp4`
 flags the fall + inactivity and reports HR/BR. ✅
 
-## P1 — Productionize the core (host, no hardware)
+## P1 — Harden the core (DONE)
 
-1. **Config system** — add `config.yaml` + `.env`/`.env.example`; load camera defs and
-   RTSP creds from env. *Accept:* pipeline can be launched from a named camera in
-   `config.yaml`; no secrets in source; `.gitignore` covers `.env`, `output/`, `*.mp4`.
-2. **Caregiver alerting (F10)** — pluggable alert sink: event → local notification +
-   optional LAN webhook (JSON POST). *Accept:* a fall event triggers the configured sink;
-   unit test with a fake sink; failures are logged, never crash the pipeline.
-3. **Encrypted clip store + retention (F11)** — encrypt event clips at rest; auto-purge
-   clips older than N days (config). *Accept:* clips unreadable without the key; a purge
-   routine deletes expired clips and is unit-tested with faked timestamps.
-4. **Trend persistence (F14)** — keep `history.jsonl`; add a daily rollup + a dashboard
-   trend view across recordings. *Accept:* dashboard shows HR/BR/gait/fall counts over
-   multiple runs (the history table already exists — extend to charts).
-5. **Accuracy harness (F15)** — a CLI that ingests an Apple Health HR export + a clip's
-   results JSON, aligns by time, and emits MAE in bpm into the report template.
-   *Accept:* given a watch CSV + results JSON, prints per-window error and overall MAE.
+Delivered as four tasks (PRD §10 Phase 1), each committed with tests (91 passing):
+1. **Camera registry** — pydantic-validated `config.yaml` (id, room, type, source, creds via
+   env-var names, orientation, person height, per-camera thresholds); `--camera <id>`. ✅
+2. **RTSP/ONVIF** — RTSP transport/timeout per camera; stdlib ONVIF WS-Discovery +
+   GetStreamUri (`python -m carelens.discovery`), hardened against hostile LAN devices;
+   loopback RTSP test. ✅
+3. **SQLite store** — migrations via `PRAGMA user_version`; runs/events/vitals/rollups;
+   whole-day retention purge with frozen rollups; dashboard reads SQLite. ✅
+4. **Presence debouncing / tracking** — gap fill, enter hysteresis, One Euro smoothing;
+   held frames never fake stillness or a fall; fall detection verified at 3–15 fps. ✅
+
+*Phase 1 acceptance:* `python -m carelens.pipeline --camera demo --truth-pose
+output/synthetic_demo.truth.json` writes the fall + inactivity + HR/BR run to
+`output/carelens.db` and the dashboard shows it (`tests/test_phase1_e2e.py`). ✅
+
+**Carried forward from the old P1 list** (not yet built): caregiver alerting sink (F10),
+encrypted clip store (F11), dashboard trend charts over rollups (F14), accuracy harness (F15).
 
 ## P2 — Live capture + on-device performance
 

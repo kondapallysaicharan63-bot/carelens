@@ -64,3 +64,6 @@ class ScriptedPose:
 
     def process(self, image_bgr, t):
         return self.fn(t)
+
+    def close(self):
+        pass
