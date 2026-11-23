@@ -1,0 +1,47 @@
+# CareLens camera registry. No secrets here: credentials come from env vars (or a local .env).
+cameras:
+  - id: demo
+    room: living-room
+    type: file
+    source: output/synthetic_demo.mp4
+
+  # Live RTSP/ONVIF camera. Credentials are read from the NAMED env vars (put them in .env).
+  # - id: kitchen
+  #   room: kitchen
+  #   type: rtsp
+  #   source: rtsp://192.168.1.50:554/stream1
+  #   username_env: RTSP_USER
+  #   password_env: RTSP_PASS
+  #   orientation: 0          # clockwise rotation: 0, 90, 180, 270
+  #   person_height_m: 1.65
+
+  # USB webcam (device index as a string)
+  # - id: desk
+  #   room: office
+  #   type: usb
+  #   source: "0"
+
+  # Jetson CSI camera
+  # - id: hall
+  #   room: hallway
+  #   type: csi
+  #   source: csi://0
+
+  # Roku 360 SE exported clip. Cloud-app cameras (Roku/Blink/Nest) are clip-export only:
+  # export from the vendor app; live video requires RTSP/ONVIF/USB/CSI.
+  # - id: roku-bedroom
+  #   room: bedroom
+  #   type: cloud_clip
+  #   source: clips/roku_export.mp4
+
+thresholds:
+  inactivity_min: 30
+  fall_still_s: 20
+
+storage:
+  out_dir: output
+  retention_days: 7
+
+dashboard:
+  host: 127.0.0.1
+  port: 5000

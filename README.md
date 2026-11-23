@@ -157,3 +157,14 @@ This project was built with AI assistance, disclosed here in full:
 
 All code is new work created during the hackathon period. No footage of any
 non-consenting person is used; all demo data is synthetic or consented.
+
+## Configured cameras
+
+Cameras are declared in `config.yaml` (credentials come from env vars named in the file,
+via the environment or a git-ignored `.env`; never inline). Run one by id:
+
+```
+python -m carelens.pipeline --camera demo
+```
+
+CLI flags (`--inactivity-min`, `--fall-still-s`, `--height-m`, `--out`) override the config.

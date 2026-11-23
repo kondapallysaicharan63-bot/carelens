@@ -12,6 +12,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .config import AppConfig, load_config, redact_url, resolve_source, runtime_env
 from .events import ActivityTimeline, FallDetector, GaitAnalyzer, InactivityDetector
 from .features import FeatureExtractor
 from .sources import VideoSource
@@ -80,7 +81,7 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         clip_name: str = "clip") -> dict:
     out = Path(out_dir)
     (out / "clips").mkdir(parents=True, exist_ok=True)
-    src = source if isinstance(source, VideoSource) else VideoSource(source, max_seconds=max_seconds)
+    src = source if hasattr(source, "fps") else VideoSource(source, max_seconds=max_seconds)
     start_time = start_time or datetime.now().replace(microsecond=0)
 
     feats: Optional[FeatureExtractor] = None
@@ -147,27 +148,92 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
     return results
 
 
+_ROTATIONS = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def rotate_frame(image: np.ndarray, orientation: int) -> np.ndarray:
+    """Rotate a frame clockwise by 0/90/180/270 degrees (0 is a no-op)."""
+    return image if not orientation else cv2.rotate(image, _ROTATIONS[orientation])
+
+
+class OrientedSource:
+    """Wraps a VideoSource, rotating each frame; exposes a redacted `source` for logs/results.
+
+    Rotation happens before downscaling so rotated cameras feed the same width as upright ones;
+    open the wrapped VideoSource with ``resize_width=None``.
+    """
+
+    def __init__(self, src: VideoSource, orientation: int, label: str, resize_width: int | None = 640):
+        self._src, self.orientation, self.source = src, orientation, label
+        self.fps, self.resize_width = src.fps, resize_width
+
+    def __iter__(self):
+        for fr in self._src:
+            img = rotate_frame(fr.image, self.orientation)
+            if self.resize_width and img.shape[1] > self.resize_width:
+                h = int(img.shape[0] * self.resize_width / img.shape[1])
+                img = cv2.resize(img, (self.resize_width, h), interpolation=cv2.INTER_AREA)
+            fr.image = img
+            yield fr
+
+
+def resolve_args(a, cfg: AppConfig, env=None, base_dir=None):
+    """Merge CLI args with a configured camera. Returns (cam, source, Config, out_dir, name)."""
+    cam = cfg.camera(a.camera)
+    if not cam.enabled:
+        raise ValueError(f"camera {cam.id!r} is disabled in the config (enabled: false)")
+    th = cfg.thresholds_for(cam)
+    inact = a.inactivity_min if a.inactivity_min is not None else th.inactivity_min
+    fall = a.fall_still_s if a.fall_still_s is not None else th.fall_still_s
+    height = a.height_m if a.height_m is not None else cam.person_height_m
+    pcfg = Config(fall_still_seconds=fall, inactivity_seconds=inact * 60, person_height_m=height)
+    out = a.out or str(Path(base_dir or ".") / cfg.storage.out_dir)
+    return cam, resolve_source(cam, env, base_dir), pcfg, out, a.name or cam.id
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Camera health monitor (wellness trends only)")
-    ap.add_argument("--source", required=True, help="video file, webcam index (0), or stream URL")
-    ap.add_argument("--out", default="output")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--source", help="video file, webcam index (0), or stream URL")
+    g.add_argument("--camera", help="camera id declared in the config file")
+    ap.add_argument("--config", default="config.yaml", help="camera registry (with --camera)")
+    ap.add_argument("--out", default=None, help="output dir (default: output, or storage.out_dir)")
     ap.add_argument("--name", default=None, help="name for this run (defaults to file stem)")
     ap.add_argument("--start", default=None, help="wall-clock start of clip, ISO format")
     ap.add_argument("--max-seconds", type=float, default=None)
-    ap.add_argument("--inactivity-min", type=float, default=30.0)
-    ap.add_argument("--fall-still-s", type=float, default=20.0)
-    ap.add_argument("--height-m", type=float, default=1.65)
+    ap.add_argument("--inactivity-min", type=float, default=None)
+    ap.add_argument("--fall-still-s", type=float, default=None)
+    ap.add_argument("--height-m", type=float, default=None)
     ap.add_argument("--model", default=None, help="MediaPipe pose .task model path")
     a = ap.parse_args(argv)
 
     from .pose import MediaPipePose, DEFAULT_MODEL
-    pose = MediaPipePose(a.model or DEFAULT_MODEL)
-    cfg = Config(fall_still_seconds=a.fall_still_s, inactivity_seconds=a.inactivity_min * 60,
-                 person_height_m=a.height_m)
-    name = a.name or (Path(a.source).stem if not str(a.source).isdigit() else "webcam")
     start = datetime.fromisoformat(a.start) if a.start else None
+    pose = MediaPipePose(a.model or DEFAULT_MODEL)  # before opening any camera, so a bad model leaks no stream
+    if a.camera:
+        base = Path(a.config).resolve().parent  # relative paths and .env are config-relative
+        try:
+            cam, source, cfg, out, name = resolve_args(a, load_config(a.config),
+                                                       runtime_env(base / ".env"), base)
+        except (KeyError, ValueError, FileNotFoundError) as e:
+            pose.close()
+            raise SystemExit(f"error: {e.args[0] if isinstance(e, KeyError) else e}")
+        label = redact_url(str(source))
+        try:
+            vs = VideoSource(source, max_seconds=a.max_seconds, resize_width=None)
+        except IOError:
+            pose.close()
+            raise SystemExit(f"error: could not open camera {cam.id!r} ({label})")
+        source = OrientedSource(vs, cam.orientation, label)
+    else:
+        source, out = a.source, a.out or "output"
+        d = Config()
+        cfg = Config(fall_still_seconds=d.fall_still_seconds if a.fall_still_s is None else a.fall_still_s,
+                     inactivity_seconds=d.inactivity_seconds if a.inactivity_min is None else a.inactivity_min * 60,
+                     person_height_m=d.person_height_m if a.height_m is None else a.height_m)
+        name = a.name or (Path(a.source).stem if not str(a.source).isdigit() else "webcam")
     try:
-        res = run(a.source, pose, a.out, cfg, start_time=start, max_seconds=a.max_seconds,
+        res = run(source, pose, out, cfg, start_time=start, max_seconds=a.max_seconds,
                   clip_name=name)
     finally:
         pose.close()

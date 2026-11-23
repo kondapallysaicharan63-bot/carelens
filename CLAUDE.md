@@ -32,7 +32,7 @@ device** and must never claim to be.
 ## Conventions
 - Python 3.10+, OpenCV/MediaPipe/NumPy/SciPy. On Jetson, use GStreamer-enabled OpenCV and
   a TensorRT pose provider for the live path (keep MediaPipe as the accuracy reference).
-- Camera configs in `cameras.yaml`; credentials from `.env` (never inline).
+- Camera configs in `config.yaml` (pydantic-validated, see `carelens/config.py`); credentials from `.env` (never inline).
 - `output/`, `*.mp4`, `.env` are git-ignored.
 
 ## Token & model discipline

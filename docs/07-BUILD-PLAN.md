@@ -19,9 +19,9 @@ flags the fall + inactivity and reports HR/BR. ✅
 
 ## P1 — Productionize the core (host, no hardware)
 
-1. **Config system** — add `cameras.yaml` + `.env`/`.env.example`; load camera defs and
+1. **Config system** — add `config.yaml` + `.env`/`.env.example`; load camera defs and
    RTSP creds from env. *Accept:* pipeline can be launched from a named camera in
-   `cameras.yaml`; no secrets in source; `.gitignore` covers `.env`, `output/`, `*.mp4`.
+   `config.yaml`; no secrets in source; `.gitignore` covers `.env`, `output/`, `*.mp4`.
 2. **Caregiver alerting (F10)** — pluggable alert sink: event → local notification +
    optional LAN webhook (JSON POST). *Accept:* a fall event triggers the configured sink;
    unit test with a fake sink; failures are logged, never crash the pipeline.

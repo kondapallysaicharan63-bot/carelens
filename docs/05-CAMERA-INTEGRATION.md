@@ -33,7 +33,7 @@ trade-offs. **Cloud-app cameras (Roku/Blink/Nest) are clip-export only** (see PR
   1. **Manual** — user pastes the RTSP URL (works everywhere). v1 default.
   2. **Auto (ONVIF WS-Discovery)** — scan the LAN, list cameras, fetch stream URIs.
      v2 (F13), gated behind the config UI.
-- Store camera configs in a small `cameras.yaml` (id, type, URL/index, label, location),
+- Store camera configs in a small `config.yaml` (id, type, URL/index, label, location),
   credentials pulled from env — never inline.
 
 ## 4. Reliability requirements (live sources)
@@ -53,5 +53,5 @@ tracking) can be driven from the pipeline as a v2 feature.
 
 ## 6. Multi-camera (v2)
 
-`cameras.yaml` + one pipeline process per camera, or a scheduler round-robining sources.
+`config.yaml` + one pipeline process per camera, or a scheduler round-robining sources.
 Keep per-camera `output/<camera_id>/` trees. Out of scope for v1.
