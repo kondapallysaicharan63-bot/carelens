@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
+import sys
 from collections import deque
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -12,13 +14,15 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .config import AppConfig, load_config, redact_url, resolve_source, runtime_env
+from .config import AppConfig, StorageConfig, load_config, redact_url, resolve_source, runtime_env
 from .events import ActivityTimeline, FallDetector, GaitAnalyzer, InactivityDetector
 from .features import FeatureExtractor
 from .sources import VideoSource
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
 BANNER = "Simulated or test data - personal learning project, not a medical device"
+LIVE_BANNER = "Live camera data - personal learning project, not a medical device"
+LIVE_KINDS = {"usb", "rtsp", "csi"}
 
 
 @dataclass
@@ -78,7 +82,8 @@ def _summary(estimates):
 
 def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         start_time: Optional[datetime] = None, max_seconds: Optional[float] = None,
-        clip_name: str = "clip") -> dict:
+        clip_name: str = "clip", store=None, camera_id: str = "default",
+        source_kind: Optional[str] = None) -> dict:
     out = Path(out_dir)
     (out / "clips").mkdir(parents=True, exist_ok=True)
     src = source if hasattr(source, "fps") else VideoSource(source, max_seconds=max_seconds)
@@ -118,7 +123,7 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         last_t = fr.t
 
     results = {
-        "banner": BANNER,
+        "banner": LIVE_BANNER if cfg.data_label == "live" else BANNER,
         "data_label": cfg.data_label,
         "source": str(getattr(src, "source", source)),
         "start_time": start_time.isoformat(),
@@ -133,18 +138,9 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
                            "windows": br.estimates},
     }
     (out / f"{clip_name}_results.json").write_text(json.dumps(results, indent=2))
-    # One line per run, so the dashboard can show trends over days.
-    with open(out / "history.jsonl", "a") as fh:
-        fh.write(json.dumps({
-            "start_time": results["start_time"], "clip": clip_name,
-            "data_label": cfg.data_label,
-            "hr_median": results["heart_rate"]["summary"]["median"],
-            "br_median": results["breathing_rate"]["summary"]["median"],
-            "gait_speed": (float(np.median([g["speed_m_s_approx"] for g in results["gait_segments"]]))
-                           if results["gait_segments"] else None),
-            "n_falls": sum(e["kind"] == "fall" for e in events),
-            "n_inactivity": sum(e["kind"] == "inactivity" for e in events),
-        }) + "\n")
+    if store is not None:
+        store.save_run(results, camera_id=camera_id, source_kind=source_kind or "file",
+                       name=clip_name, export_path=str(out / f"{clip_name}_results.json"))
     return results
 
 
@@ -177,6 +173,31 @@ class OrientedSource:
             yield fr
 
 
+def default_data_label(kind: str) -> str:
+    """Live camera sources are 'live'; files and exported cloud clips stay 'test'."""
+    return "live" if kind in LIVE_KINDS else "test"
+
+
+def default_run_name(explicit, kind: str, ident: str, start: datetime, file_stem=None) -> str:
+    """Explicit --name wins; file sources use the stem; live/camera runs get a unique
+    `<id>_<YYYYmmdd-HHMMSS>` so repeated runs never share a name (or an export/clip path)."""
+    if explicit:
+        return explicit
+    if kind == "file" and file_stem:
+        return file_stem
+    return f"{ident}_{start.strftime('%Y%m%d-%H%M%S')}"
+
+
+def resolve_storage(config_path, out_arg=None):
+    """Storage settings for --source runs: the config's storage block if the file exists,
+    else defaults. Returns (StorageConfig, out_dir)."""
+    p = Path(config_path)
+    if p.is_file():
+        st = load_config(p).storage
+        return st, out_arg or str(p.resolve().parent / st.out_dir)
+    return StorageConfig(), out_arg or "output"
+
+
 def resolve_args(a, cfg: AppConfig, env=None, base_dir=None):
     """Merge CLI args with a configured camera. Returns (cam, source, Config, out_dir, name)."""
     cam = cfg.camera(a.camera)
@@ -186,9 +207,19 @@ def resolve_args(a, cfg: AppConfig, env=None, base_dir=None):
     inact = a.inactivity_min if a.inactivity_min is not None else th.inactivity_min
     fall = a.fall_still_s if a.fall_still_s is not None else th.fall_still_s
     height = a.height_m if a.height_m is not None else cam.person_height_m
-    pcfg = Config(fall_still_seconds=fall, inactivity_seconds=inact * 60, person_height_m=height)
+    pcfg = Config(fall_still_seconds=fall, inactivity_seconds=inact * 60, person_height_m=height,
+                  data_label=default_data_label(cam.type.value))
     out = a.out or str(Path(base_dir or ".") / cfg.storage.out_dir)
     return cam, resolve_source(cam, env, base_dir), pcfg, out, a.name or cam.id
+
+
+def infer_source_kind(source) -> str:
+    s = str(source).strip().lower()
+    if s.isdigit():
+        return "usb"
+    if s.startswith(("rtsp://", "rtsps://")):
+        return "rtsp"
+    return "csi" if s.startswith("csi://") else "file"
 
 
 def main(argv=None):
@@ -207,36 +238,69 @@ def main(argv=None):
     ap.add_argument("--model", default=None, help="MediaPipe pose .task model path")
     a = ap.parse_args(argv)
 
+    from .store import Store
     from .pose import MediaPipePose, DEFAULT_MODEL
-    start = datetime.fromisoformat(a.start) if a.start else None
+    start = datetime.fromisoformat(a.start) if a.start else datetime.now().replace(microsecond=0)
     pose = MediaPipePose(a.model or DEFAULT_MODEL)  # before opening any camera, so a bad model leaks no stream
+    cam = None
     if a.camera:
         base = Path(a.config).resolve().parent  # relative paths and .env are config-relative
         try:
-            cam, source, cfg, out, name = resolve_args(a, load_config(a.config),
-                                                       runtime_env(base / ".env"), base)
+            app_cfg = load_config(a.config)
+            cam, source, cfg, out, name = resolve_args(a, app_cfg, runtime_env(base / ".env"), base)
         except (KeyError, ValueError, FileNotFoundError) as e:
             pose.close()
             raise SystemExit(f"error: {e.args[0] if isinstance(e, KeyError) else e}")
+        storage, camera_id, kind = app_cfg.storage, cam.id, cam.type.value
+        name = default_run_name(a.name, kind, cam.id, start)
+    else:
+        try:
+            storage, out = resolve_storage(a.config, a.out)
+        except (ValueError, FileNotFoundError) as e:
+            pose.close()
+            raise SystemExit(f"error: {e}")
+        source = a.source
+        kind = infer_source_kind(a.source)
+        d = Config()
+        cfg = Config(fall_still_seconds=d.fall_still_seconds if a.fall_still_s is None else a.fall_still_s,
+                     inactivity_seconds=d.inactivity_seconds if a.inactivity_min is None else a.inactivity_min * 60,
+                     person_height_m=d.person_height_m if a.height_m is None else a.height_m,
+                     data_label=default_data_label(kind))
+        stem = Path(a.source).stem if kind == "file" else None
+        ident = {"usb": "webcam"}.get(kind, kind)
+        name = default_run_name(a.name, kind, ident, start, stem)
+        camera_id = "default"
+    try:  # before any camera is opened, so a bad database leaks no stream
+        store = Store(Path(out) / storage.db_path)
+    except (OSError, sqlite3.Error, RuntimeError) as e:
+        pose.close()
+        raise SystemExit(f"error: could not open database {Path(out) / storage.db_path}: {e}")
+    if cam is not None:
         label = redact_url(str(source))
         try:
             vs = VideoSource(source, max_seconds=a.max_seconds, resize_width=None,
                              rtsp_transport=cam.rtsp_transport, open_timeout_s=cam.open_timeout_s)
         except IOError:
+            store.close()
             pose.close()
             raise SystemExit(f"error: could not open camera {cam.id!r} ({label})")
         source = OrientedSource(vs, cam.orientation, label)
-    else:
-        source, out = a.source, a.out or "output"
-        d = Config()
-        cfg = Config(fall_still_seconds=d.fall_still_seconds if a.fall_still_s is None else a.fall_still_s,
-                     inactivity_seconds=d.inactivity_seconds if a.inactivity_min is None else a.inactivity_min * 60,
-                     person_height_m=d.person_height_m if a.height_m is None else a.height_m)
-        name = a.name or (Path(a.source).stem if not str(a.source).isdigit() else "webcam")
     try:
         res = run(source, pose, out, cfg, start_time=start, max_seconds=a.max_seconds,
-                  clip_name=name)
+                  clip_name=name, store=store, camera_id=camera_id, source_kind=kind)
+        try:
+            keep = store.latest_run_id(camera_id, name)
+            purged = store.purge(retention_days=storage.retention_days,
+                                 clips_dir=Path(out) / "clips",
+                                 rollup_retention_days=storage.rollup_retention_days,
+                                 exclude_run_ids=[keep] if keep else [])
+            if purged["kept_excluded"]:
+                print(f"note: this run is older than the {storage.retention_days}-day retention "
+                      "window and will be removed on the next purge", file=sys.stderr)
+        except Exception as e:  # a purge problem must not hide a successful run
+            print(f"warning: retention purge failed: {e}", file=sys.stderr)
     finally:
+        store.close()
         pose.close()
     print(json.dumps({"events": res["events"], "heart_rate": res["heart_rate"]["summary"],
                       "breathing_rate": res["breathing_rate"]["summary"],

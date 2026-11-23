@@ -82,6 +82,8 @@ class CameraConfig(_Strict):
 class StorageConfig(_Strict):
     out_dir: str = "output"
     retention_days: int = Field(7, ge=1)
+    db_path: str = "carelens.db"          # relative to out_dir
+    rollup_retention_days: int = Field(365, ge=1)
 
 
 class DashboardConfig(_Strict):

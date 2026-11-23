@@ -26,7 +26,7 @@ caregiver alerting (LAN-local).
      └───────────┴──────────┴─────┬─────┴───────────┴───────────────┘
                                    ▼
                         ┌────────────────────┐
-                        │  pipeline.run()    │→ results.json + event clips + history.jsonl
+                        │  pipeline.run()    │→ results.json + event clips + SQLite store
                         └────────────────────┘
                                    │
                                    ▼
@@ -61,8 +61,8 @@ caregiver alerting (LAN-local).
 - **Quality-gated vitals.** rPPG/breathing only emit when still + well-lit, and every
   estimate carries a quality score; the dashboard shows reported vs withheld windows. This
   keeps the "honest, not a medical device" promise visible.
-- **Append-only history** (`history.jsonl`) for day-over-day trends without a database. A
-  real DB (SQLite) is a v2 option if trend queries grow.
+- **SQLite store** (`carelens/store.py`, `output/carelens.db`) is the source of truth; daily rollups survive the raw purge. It replaced `history.jsonl`. A
+  `_results.json` remains as a per-run export.
 
 ## 4. Deployment topology
 

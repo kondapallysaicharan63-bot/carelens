@@ -39,7 +39,7 @@ feature, not an afterthought — and it's the strongest story for the portfolio.
 - **Event clips**: short, low-res, under `output/clips/`. Encrypt the store (LUKS volume
   or per-file encryption with a key in the OS keyring).
 - **Retention**: auto-purge clips older than N days (proposed default 7). Keep derived
-  `history.jsonl` (no imagery) longer for trends.
+  daily rollups in SQLite (no imagery) longer for trends.
 - **Results JSON**: contains timestamps, postures, rates — treat as health data; same
   access control as clips.
 

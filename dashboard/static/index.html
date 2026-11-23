@@ -67,8 +67,8 @@ function statBlock(s, unit) {
     : `<div class="stat">${s.median} <span class="sub">${unit}</span></div><div class="sub">median of ${s.n_reported}/${s.n_windows} windows · mean quality ${s.mean_quality}</div>`;
 }
 
-async function load(name) {
-  const r = await (await fetch(`/api/run/${encodeURIComponent(name)}`)).json();
+async function load(id) {
+  const r = await (await fetch(`/api/run/${encodeURIComponent(id)}`)).json();
   document.getElementById('banner').textContent = `${r.banner} · data: ${r.data_label} · source: ${r.source}`;
   // posture track
   const tr = r.posture_track, w = 900, h = 40, dur = Math.max(r.duration_s, 1);
@@ -107,9 +107,9 @@ async function loadHistory() {
 (async () => {
   const runs = await (await fetch('/api/runs')).json();
   const sel = document.getElementById('run');
-  sel.innerHTML = runs.map(n => `<option>${esc(n)}</option>`).join('');
+  sel.innerHTML = runs.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.start_time)}${r.data_label !== 'live' ? ' (' + esc(r.data_label) + ')' : ''}</option>`).join('');
   sel.onchange = () => load(sel.value);
-  if (runs.length) load(runs[runs.length - 1]);
+  if (runs.length) load(runs[0].id);  // newest first
   loadHistory();
 })();
 </script>

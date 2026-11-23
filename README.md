@@ -63,7 +63,12 @@ python dashboard/app.py --out output      # then open http://127.0.0.1:5000
 ```
 
 Each run writes `output/<name>_results.json`, any event clips under `output/clips/`,
-and one line to `output/history.jsonl` for the cross-recording trend view.
+and stores every run in the SQLite database `output/carelens.db` (the dashboard reads only
+this; `_results.json` is a per-run export for the accuracy harness). Raw runs and clips are
+purged after `storage.retention_days` (default 7; purge runs after each pipeline run, or
+`python -m carelens.store purge --out output --days N`). Purging works in whole local days. Phase-0 data can be imported once with
+`python -m carelens.store import-legacy --out output` (not automatic). Daily rollups (HR/BR/gait/event
+counts, no imagery) survive the purge for `storage.rollup_retention_days` (default 365).
 
 ## Recording test clips (Logitech / any webcam)
 
