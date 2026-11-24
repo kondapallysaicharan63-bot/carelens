@@ -34,18 +34,21 @@ Delivered as four tasks (PRD §10 Phase 1), each committed with tests (91 passin
 output/synthetic_demo.truth.json` writes the fall + inactivity + HR/BR run to
 `output/carelens.db` and the dashboard shows it (`tests/test_phase1_e2e.py`). ✅
 
-**Carried forward from the old P1 list** (not yet built): caregiver alerting sink (F10),
-encrypted clip store (F11), dashboard trend charts over rollups (F14), accuracy harness (F15).
+**Carried forward from the old P1 list — now DONE:** caregiver alerting (F10, opt-in, LAN-only,
+store-and-forward), encrypted clip store (F11), dashboard trend charts (F14), accuracy harness
+(F15, `python -m carelens.accuracy`). ✅
 
 ## P2 — Live capture + on-device performance
 
 6. **Robust live `VideoSource`** — auto-reconnect with backoff, stall watchdog, drop-old
    frame queue, threaded capture→inference. *Accept:* a hardware/loopback test survives a
-   mid-run RTSP disconnect and keeps latency bounded.
-7. **TensorRT pose provider** — add a `PoseProvider` backed by `trt_pose` or
-   YOLOv8-pose→TensorRT; keep MediaPipe as the accuracy reference. *Accept:* same landmark
+   mid-run RTSP disconnect and keeps latency bounded. ✅ (`LiveSource`, loopback kill/restart test)
+7. **TensorRT pose provider** *(needs the Jetson)* — add a `PoseProvider` backed by a
+   **permissively licensed** model exported to TensorRT (e.g. `trt_pose` (MIT) or an
+   Apache-2.0 pose model such as RTMPose/MMPose). **Not Ultralytics YOLOv8/11-pose — AGPL-3.0
+   violates the permissive-license rule.** keep MediaPipe as the accuracy reference. *Accept:* same landmark
    contract; benchmark both on Jetson; TensorRT path ≥ 15 FPS @ 720p.
-8. **Performance + thermal harness** — measure FPS, latency, CPU/GPU, temps via
+8. **Performance + thermal harness** *(needs the Jetson)* — measure FPS, latency, CPU/GPU, temps via
    `tegrastats`; 30-min soak. *Accept:* report meets the PRD throughput/thermal targets.
 
 ## P3 — Jetson deployment
