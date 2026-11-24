@@ -253,8 +253,9 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         "timeline_by_hour": timeline.to_dict(),
         "posture_track": postures,
         "gait_segments": gait.finish(),
-        "heart_rate": {"unit": "bpm", "summary": _summary(hr.estimates), "windows": hr.estimates},
-        "breathing_rate": {"unit": "breaths/min", "summary": _summary(br.estimates),
+        "heart_rate": {"unit": "bpm", "window_s": hr.window_s, "summary": _summary(hr.estimates),
+                       "windows": hr.estimates},
+        "breathing_rate": {"unit": "breaths/min", "window_s": br.window_s, "summary": _summary(br.estimates),
                            "windows": br.estimates},
     }
     (out / f"{clip_name}_results.json").write_text(json.dumps(results, indent=2))

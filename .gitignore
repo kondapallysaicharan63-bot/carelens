@@ -14,3 +14,7 @@ __pycache__/
 cli_err.log
 .env
 .DS_Store
+
+accuracy/
+export.xml
+export.zip

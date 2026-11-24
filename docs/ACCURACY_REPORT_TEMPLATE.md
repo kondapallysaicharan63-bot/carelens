@@ -68,3 +68,33 @@ Public fall datasets used (name + license): ____
 - Minimum stillness needed for vitals:
 - Known false-alarm triggers:
 - What I would improve next:
+
+---
+
+## How to fill this (harness: `python -m carelens.accuracy`)
+
+1. **Export Apple Watch heart rate:** iPhone Health app -> profile picture -> *Export All Health
+   Data* -> `export.zip` -> unzip to `export.xml`. Keep it off-repo (`export.xml`/`export.zip`
+   and `accuracy/` are git-ignored); it is personal health data.
+2. **Run the pipeline** on a consented clip recorded while wearing the watch (note the real
+   start time; the watch and camera clocks must agree, or pass `--offset-s`).
+3. **Run the harness:**
+   ```
+   python -m carelens.accuracy --run output/clip_results.json --tz=-08:00 \
+       --hr-ref export.xml [--br-ref breaths.csv] [--labels labels.csv] --out accuracy/
+   ```
+   `--run` also takes `db:output/carelens.db#<run_id>` (uses the run's stored UTC offset).
+   CSV formats: `timestamp,bpm` / `timestamp,breaths_per_min` (ISO 8601 with offset);
+   labels `clip,kind,onset_s` (`kind` = `fall` or `none`). Defaults: `--tolerance-s 30`,
+   `--offset-s 0`, `--event-tol-s 10`.
+4. **Paste `accuracy/report_fragment.md`** into sections 2-4; full per-window data is in
+   `accuracy/metrics.json`. Report misses and the unreported share, not only the good windows.
+
+Metric definitions (camera minus reference; module docstring in `carelens/accuracy.py` is
+authoritative): a window is compared at its centre (run start + `t` - window/2 + offset; naive times use `--tz`/the DB run zone); it matches the
+mean of reference samples within the tolerance. Main stats use only **reported** windows with a
+match: MAE, RMSE, bias, Bland-Altman limits of agreement (bias +- 1.96 SD, n >= 3), Pearson r
+(n >= 5), bootstrap 95% CI for MAE (n >= 5). **Coverage** = reported / all windows. MAE over all
+matched windows (incl. unreported) is shown separately. Falls: sensitivity, false alarms
+(and per hour), PPV, onset error. With no matches the harness reports nulls and hints at a clock
+offset (never applied automatically).

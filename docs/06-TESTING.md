@@ -45,11 +45,14 @@ proves the logic; real consented clips prove the system.** Never conflate the tw
 - CI: run layers 1–2 on every push (CPU-only, no camera). Layers 3–4 are manual/on-device
   and recorded in the accuracy report.
 
+- Accuracy harness (`python -m carelens.accuracy`, tests in `tests/test_accuracy.py`):
+  synthetic fixtures only; its end-to-end test checks alignment math, not real-world accuracy.
+
 ## 6. Test data policy
 
 - Synthetic clips: generated, no real person — safe to commit if small, else regenerate.
 - Real clips: **never commit**; keep off-repo; store consent records.
-- `output/`, `*.mp4` are git-ignored.
+- `output/`, `*.mp4`, `accuracy/`, `export.xml`, `export.zip` are git-ignored.
 
 ## 7. Definition of done (per the brief)
 
