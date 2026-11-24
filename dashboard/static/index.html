@@ -5,21 +5,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Room wellness monitor</title>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2430; --muted:#6b7480; --line:#e3e6ea;
-          --sit:#5b8def; --stand:#3fb68b; --walk:#f0a540; --lie:#d9534f; --absent:#c8ccd2; }
+  :root { --bg:#f6f7f9; --card:#fcfcfb; --ink:#1d2430; --muted:#6b7480; --line:#e3e6ea;
+          --sit:#5b8def; --stand:#3fb68b; --walk:#f0a540; --lie:#d9534f; --absent:#c8ccd2;
+          --banner-bg:#fff4d6; --banner-line:#f0d58a; --alerts-bg:#fff1f0; --alerts-line:#f0b4ae; --ev-bg:#fbfbfc;
+          --viz-grid:#e1e0d9; --viz-axis:#c3c2b7; --viz-ink2:#52514e; --viz-hatch:#898781;
+          --cam-0:#2a78d6; --cam-1:#eb6834; --cam-2:#1baf7a; --cam-3:#eda100;
+          --cam-4:#e87ba4; --cam-5:#008300; --cam-6:#6250d6; --cam-7:#e34948; color-scheme:light; }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --bg:#0d0d0d; --card:#1a1a19; --ink:#f0efec; --muted:#a9a89f; --line:#2c2c2a;
+      --banner-bg:#3a3010; --banner-line:#6b5a1c; --alerts-bg:#3a1b19; --alerts-line:#6e332f; --ev-bg:#222221;
+      --viz-grid:#2c2c2a; --viz-axis:#383835; --viz-ink2:#c3c2b7; --viz-hatch:#898781;
+      --cam-0:#3987e5; --cam-1:#d95926; --cam-2:#199e70; --cam-3:#c98500;
+      --cam-4:#d55181; --cam-5:#0ca30c; --cam-6:#9085e9; --cam-7:#e66767; color-scheme:dark; } }
+  :root[data-theme="dark"] {
+      --bg:#0d0d0d; --card:#1a1a19; --ink:#f0efec; --muted:#a9a89f; --line:#2c2c2a;
+      --banner-bg:#3a3010; --banner-line:#6b5a1c; --alerts-bg:#3a1b19; --alerts-line:#6e332f; --ev-bg:#222221;
+      --viz-grid:#2c2c2a; --viz-axis:#383835; --viz-ink2:#c3c2b7; --viz-hatch:#898781;
+      --cam-0:#3987e5; --cam-1:#d95926; --cam-2:#199e70; --cam-3:#c98500;
+      --cam-4:#d55181; --cam-5:#0ca30c; --cam-6:#9085e9; --cam-7:#e66767; color-scheme:dark; }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
-  .banner { background:#fff4d6; border-bottom:1px solid #f0d58a; padding:10px 20px; font-weight:600; }
+  .banner { background:var(--banner-bg); border-bottom:1px solid var(--banner-line); padding:10px 20px; font-weight:600; }
   header { display:flex; align-items:center; gap:16px; padding:16px 20px 4px; flex-wrap:wrap; }
   h1 { font-size:20px; margin:0; }
-  select { font:inherit; padding:4px 8px; }
+  select, button { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line); border-radius:6px; }
+  select { padding:4px 8px; }
   main { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; padding:16px 20px 32px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
   .card h2 { font-size:14px; margin:0 0 10px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
   .wide { grid-column:1/-1; }
   .stat { font-size:28px; font-weight:700; }
   .sub { color:var(--muted); font-size:12px; }
-  .ev { border-left:4px solid var(--lie); padding:6px 10px; margin:8px 0; background:#fbfbfc; }
+  .ev { border-left:4px solid var(--lie); padding:6px 10px; margin:8px 0; background:var(--ev-bg); }
   .ev.inactivity { border-color:var(--walk); }
   .ev.camera_offline { border-color:var(--walk); }
   .legend span { display:inline-flex; align-items:center; gap:4px; margin-right:12px; font-size:12px; }
@@ -27,10 +45,39 @@
   table { border-collapse:collapse; width:100%; font-size:13px; }
   td, th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; }
   svg text { font-size:10px; fill:var(--muted); }
-  .alerts { background:#fff1f0; border-bottom:1px solid #f0b4ae; padding:8px 20px; }
+  .alerts { background:var(--alerts-bg); border-bottom:1px solid var(--alerts-line); padding:8px 20px; }
   .alerts:empty { display:none; }
   .alert { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:4px 0; }
-  .alert button { font:inherit; padding:3px 10px; cursor:pointer; }
+  .alert button { padding:3px 10px; cursor:pointer; }
+  /* ---- daily trends ---- */
+  .trends .lede { margin:-4px 0 10px; color:var(--viz-ink2); font-size:13px; }
+  .filters { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:12px; }
+  .filters label { color:var(--viz-ink2); font-size:12px; }
+  .seg { display:inline-flex; }
+  .seg button { padding:4px 12px; border-radius:0; margin-left:-1px; cursor:pointer; min-height:28px; }
+  .seg button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
+  .seg button:last-child { border-radius:0 6px 6px 0; }
+  .seg button[aria-pressed="true"], #trtable[aria-pressed="true"] { background:var(--ink); color:var(--card); border-color:var(--ink); }
+  #trtable { padding:4px 12px; cursor:pointer; min-height:28px; margin-left:auto; }
+  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:18px 20px; transition:opacity .15s; }
+  .charts.busy { opacity:.5; }
+  .vz h3 { font-size:13px; font-weight:600; margin:0 0 4px; color:var(--ink); }
+  .vz .plot { position:relative; outline-offset:2px; border-radius:4px; }
+  .vz .plot:focus-visible { outline:2px solid var(--ink); }
+  .vz svg { display:block; }
+  .vz svg text { fill:var(--muted); font-size:10px; }
+  .vz .tip { position:absolute; top:4px; pointer-events:none; background:var(--card); color:var(--ink); border:1px solid var(--viz-axis);
+    border-radius:6px; padding:5px 8px; font-size:12px; line-height:1.35; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.18); z-index:2; }
+  .vz .tip[hidden] { display:none; }
+  .vz .tip .d { color:var(--viz-ink2); font-size:11px; }
+  .vz .tip .v { font-weight:700; font-size:14px; }
+  .vz .tip .k { display:inline-block; width:12px; height:0; border-top:2px solid; vertical-align:middle; margin-right:6px; }
+  .vz .tip .t { color:var(--viz-ink2); font-size:11px; }
+  .trkey { margin-top:12px; font-size:12px; color:var(--viz-ink2); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .trkey svg { vertical-align:middle; }
+  .trnote { margin-top:8px; }
+  .scroll { overflow-x:auto; }
+  .num { font-variant-numeric:tabular-nums; }
   footer { padding:8px 20px 24px; color:var(--muted); font-size:12px; }
   video { width:100%; max-width:360px; margin-top:6px; border-radius:6px; }
 </style>
@@ -48,6 +95,15 @@
   <section class="card"><h2>Breathing rate (camera estimate)</h2><div id="brstat"></div><div id="br"></div></section>
   <section class="card"><h2>Time by posture per hour</h2><div id="timeline"></div></section>
   <section class="card"><h2>Walking (approximate)</h2><div id="gait"></div></section>
+  <section class="card wide trends" id="trends" aria-labelledby="trh"><h2 id="trh">Daily trends</h2>
+    <p class="lede">Wellness trends &mdash; not a diagnosis. A sustained change may be worth a check-in.</p>
+    <div class="filters" id="trfilters" hidden>
+      <label for="trcam">Camera</label><select id="trcam"></select>
+      <span class="seg" role="group" aria-label="Date range" id="trrange">
+        <button type="button" data-d="7">7 days</button><button type="button" data-d="30">30 days</button><button type="button" data-d="90">90 days</button></span>
+      <button type="button" id="trtable" aria-pressed="false">Table view</button>
+    </div>
+    <div id="trbody"></div></section>
   <section class="card wide"><h2>Trend across recordings</h2><div id="history"></div></section>
 </main>
 <footer>Wellness aid &mdash; not for emergencies. <span id="falsealarms"></span></footer>
@@ -61,10 +117,10 @@ function lineChart(points, {lo, hi, unit, w=420, h=150}) {
   const t0 = points[0].t, t1 = Math.max(points[points.length-1].t, t0 + 1);
   const X = t => 34 + (t - t0) / (t1 - t0) * (w - 44), Y = v => h - 20 - (v - lo) / (hi - lo) * (h - 30);
   let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%">`;
-  for (const g of [lo, (lo+hi)/2, hi]) svg += `<line x1="34" x2="${w-10}" y1="${Y(g)}" y2="${Y(g)}" stroke="#eee"/><text x="2" y="${Y(g)+3}">${g}</text>`;
+  for (const g of [lo, (lo+hi)/2, hi]) svg += `<line x1="34" x2="${w-10}" y1="${Y(g)}" y2="${Y(g)}" stroke="var(--viz-grid)"/><text x="2" y="${Y(g)+3}">${g}</text>`;
   for (const p of points) {
     const v = Math.min(hi, Math.max(lo, p.value));
-    svg += `<circle cx="${X(p.t)}" cy="${Y(v)}" r="${p.reported ? 3 : 2}" fill="${p.reported ? 'var(--ink)' : 'none'}" stroke="${p.reported ? 'none' : '#bbb'}"><title>t=${fmt(p.t)}  ${p.value} ${unit}  quality ${p.quality}</title></circle>`;
+    svg += `<circle cx="${X(p.t)}" cy="${Y(v)}" r="${p.reported ? 3 : 2}" fill="${p.reported ? 'var(--ink)' : 'none'}" stroke="${p.reported ? 'none' : 'var(--muted)'}"><title>t=${fmt(p.t)}  ${p.value} ${unit}  quality ${p.quality}</title></circle>`;
   }
   svg += `<text x="34" y="${h-4}">${fmt(t0)}</text><text x="${w-40}" y="${h-4}">${fmt(t1)}</text></svg>`;
   return svg + '<div class="sub">Filled dots: quality above threshold (reported). Hollow: low quality, not reported.</div>';
@@ -83,10 +139,10 @@ async function load(id) {
   let svg = `<svg viewBox="0 0 ${w} ${h+14}" width="100%">`;
   tr.forEach((p, i) => { const t1 = i+1 < tr.length ? tr[i+1].t : r.duration_s;
     svg += `<rect x="${p.t/dur*w}" y="0" width="${Math.max(1,(t1-p.t)/dur*w)}" height="${h}" fill="${COLORS[p.posture]}"><title>${fmt(p.t)} ${p.posture}</title></rect>`; });
-  for (const e of r.events) svg += `<line x1="${e.t_onset/dur*w}" x2="${e.t_onset/dur*w}" y1="0" y2="${h}" stroke="#000" stroke-width="2"/>`;
+  for (const e of r.events) svg += `<line x1="${e.t_onset/dur*w}" x2="${e.t_onset/dur*w}" y1="0" y2="${h}" stroke="var(--ink)" stroke-width="2"/>`;
   svg += `<text x="0" y="${h+12}">0:00</text><text x="${w-30}" y="${h+12}">${fmt(dur)}</text></svg>`;
   document.getElementById('track').innerHTML = svg;
-  document.getElementById('legend').innerHTML = Object.entries(COLORS).map(([k,c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('') + '<span>| black line = event</span>';
+  document.getElementById('legend').innerHTML = Object.entries(COLORS).map(([k,c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('') + '<span>| line = event</span>';
   // events
   document.getElementById('events').innerHTML = r.events.length ? r.events.map(e =>
     `<div class="ev ${esc(e.kind)}"><b>${{fall:'Possible fall', inactivity:'Inactivity', camera_offline:'Camera offline'}[e.kind] || esc(e.kind)}</b> at ${fmt(e.t_onset)} (confirmed ${fmt(e.t_confirmed)})<br>${esc(e.message)}
@@ -111,6 +167,203 @@ async function loadHistory() {
     rows.map(r => `<tr><td>${esc(r.start_time)}</td><td>${esc(r.clip)}</td><td>${esc(r.data_label)}</td><td>${r.hr_median ?? '—'}</td><td>${r.br_median ?? '—'}</td><td>${r.gait_speed ?? '—'}</td><td>${r.n_falls}</td><td>${r.n_inactivity}</td></tr>`).join('') + '</table>'
     : '<p class="sub">No recordings yet.</p>';
 }
+
+// ---- daily trends (small multiples over /api/rollups; one camera, one measure per chart) ----
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dayNum = s => { const [y,m,d] = s.split('-').map(Number); return Date.UTC(y, m-1, d) / 864e5; };
+const dayStr = n => new Date(n * 864e5).toISOString().slice(0, 10);
+const dayLabel = s => { const [, m, d] = s.split('-'); return MON[+m-1] + ' ' + (+d); };
+const TREND_EMPTY = 'Not enough data for trends yet — trends need several days of recordings.';
+const TR = {rows: [], cams: [], cam: null, range: 30, table: false};
+const MEASURES = [
+  {key:'hr_median',     title:'Heart rate, daily median (bpm)',          unit:'bpm',        name:'Heart rate',      kind:'line'},
+  {key:'br_median',     title:'Breathing rate, daily median (breaths/min)', unit:'breaths/min', name:'Breathing rate',  kind:'line'},
+  {key:'gait_speed',    title:'Walking speed, daily (m/s, approx.)',     unit:'m/s',        name:'Walking speed',   kind:'line'},
+  {key:'n_falls',       title:'Possible-fall alerts per day (count)',    unit:'',           name:'Possible falls',  kind:'bar'},
+  {key:'n_inactivity',  title:'Inactivity alerts per day (count)',       unit:'',           name:'Inactivity alerts', kind:'bar'},
+];
+function niceTicks(lo, hi, n, integer) {
+  if (hi <= lo) hi = lo + 1;
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw)), f = raw / mag;
+  let step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+  if (integer) step = Math.max(1, step);
+  const out = [];
+  for (let v = Math.floor(lo / step) * step; v < Math.ceil(hi / step) * step + step / 1e3; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+const tickText = v => String(+v.toFixed(2));
+
+function trendShell(charts, m) {   // all shells go in first so every chart measures its final grid cell
+  const wrap = document.createElement('div'); wrap.className = 'vz';
+  const h3 = document.createElement('h3'); h3.textContent = m.title; wrap.appendChild(h3);
+  const plot = document.createElement('div'); plot.className = 'plot'; plot.tabIndex = 0;
+  wrap.appendChild(plot); charts.appendChild(wrap); return plot;
+}
+function trendChart(plot, m, win, byDay, color, uid) {
+  plot.setAttribute('role', 'group');
+  plot.setAttribute('aria-label', m.title + '. Arrow keys step through days; the table view lists every value.');
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true;
+  const W = Math.max(240, plot.clientWidth || 300), H = 170, L = 34, R = 8, T = 8, B = 22;
+  const n = win.length, pw = W - L - R, ph = H - T - B, slot = pw / n;
+  const vals = win.map(d => { const r = byDay[d]; return r && r[m.key] != null ? r[m.key] : null; });
+  const have = vals.filter(v => v != null);
+  const integer = m.kind === 'bar';
+  let lo, hi;
+  if (integer) { lo = 0; hi = Math.max(1, ...have, 1); }
+  else if (have.length) {
+    lo = Math.min(...have); hi = Math.max(...have);
+    const pad = (hi - lo) * 0.15 || Math.max(1, Math.abs(hi) * 0.1); lo -= pad; hi += pad;
+  } else { lo = 0; hi = 1; }
+  const ticks = niceTicks(lo, hi, integer ? Math.min(4, hi) : 4, integer);
+  lo = ticks[0]; hi = ticks[ticks.length - 1];
+  const X = i => L + (i + 0.5) * slot, Y = v => T + ph - (v - lo) / (hi - lo) * ph;
+  let g = `<defs><pattern id="hatch${uid}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--viz-hatch)" stroke-width="1.5" opacity=".45"/></pattern></defs>`;
+  win.forEach((d, i) => { if (byDay[d] && byDay[d].any_simulated)
+    g += `<rect x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="url(#hatch${uid})"/>`; });
+  for (const t of ticks)
+    g += `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" style="stroke:var(--viz-grid)" stroke-width="1"/><text x="${L - 5}" y="${Y(t) + 3}" text-anchor="end">${tickText(t)}</text>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${T + ph}" y2="${T + ph}" style="stroke:var(--viz-axis)" stroke-width="1"/>`;
+  const every = Math.max(1, Math.ceil(60 / slot));
+  for (let i = n - 1; i >= 0; i -= every) {
+    const x = X(i), a = x < L + 22 ? 'start' : x > W - 24 ? 'end' : 'middle';
+    g += `<text x="${a === 'start' ? L : a === 'end' ? W - R : x}" y="${H - 6}" text-anchor="${a}">${esc(dayLabel(win[i]))}</text>`;
+  }
+  g += `<rect id="wash${uid}" y="${T}" height="${ph}" width="${slot}" fill="var(--ink)" opacity="0" />`;
+  if (m.kind === 'line') {
+    let d = '', prev = false;
+    vals.forEach((v, i) => { if (v == null) { prev = false; return; } d += `${prev ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`; prev = true; });
+    g += `<path d="${d}" fill="none" style="stroke:${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    vals.forEach((v, i) => {   // markers: every data day when there is room, else isolated days (no line to carry them)
+      if (v == null) return;
+      if (slot >= 9 || (vals[i-1] == null && vals[i+1] == null))
+        g += `<circle cx="${X(i)}" cy="${Y(v)}" r="4" style="fill:${color};stroke:var(--card)" stroke-width="2"/>`;
+    });
+    g += `<line id="xh${uid}" y1="${T}" y2="${T + ph}" style="stroke:var(--viz-ink2)" stroke-width="1" opacity="0"/>`;
+    g += `<circle id="dot${uid}" r="4" style="fill:${color};stroke:var(--card)" stroke-width="2" opacity="0"/>`;
+  } else {
+    const bw = Math.max(1.5, Math.min(24, slot - 2));
+    vals.forEach((v, i) => {
+      if (!v) return;
+      const x = X(i) - bw / 2, y = Y(v), r = Math.min(4, bw / 2, T + ph - y);
+      g += `<path class="bar" data-i="${i}" d="M${x},${T + ph}V${y + r}Q${x},${y} ${x + r},${y}H${x + bw - r}Q${x + bw},${y} ${x + bw},${y + r}V${T + ph}Z" style="fill:${color}" opacity=".9"/>`;
+    });
+  }
+  plot.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">${g}</svg>`;
+  plot.appendChild(tip);
+  const svg = plot.firstChild, wash = svg.querySelector('#wash' + uid), xh = svg.querySelector('#xh' + uid), dot = svg.querySelector('#dot' + uid);
+  let cur = -1;
+  const show = i => {
+    i = Math.max(0, Math.min(n - 1, i)); cur = i;
+    const d = win[i], r = byDay[d], v = vals[i];
+    wash.setAttribute('x', L + i * slot); wash.setAttribute('opacity', '.07');
+    if (xh) { xh.setAttribute('x1', X(i)); xh.setAttribute('x2', X(i)); xh.setAttribute('opacity', '1'); }
+    if (dot) { if (v != null) { dot.setAttribute('cx', X(i)); dot.setAttribute('cy', Y(v)); dot.setAttribute('opacity', '1'); } else dot.setAttribute('opacity', '0'); }
+    svg.querySelectorAll('.bar').forEach(b => b.setAttribute('opacity', +b.dataset.i === i ? '1' : '.9'));
+    tip.replaceChildren();
+    const dd = document.createElement('div'); dd.className = 'd'; dd.textContent = dayLabel(d) + ' ' + d.slice(0, 4); tip.appendChild(dd);
+    const vv = document.createElement('div');
+    if (v == null && !(integer && r)) { vv.className = 't'; vv.textContent = 'No data'; }
+    else {
+      const k = document.createElement('span'); k.className = 'k'; k.style.borderColor = color;
+      const b = document.createElement('span'); b.className = 'v'; b.textContent = String(v);
+      const u = document.createElement('span'); u.className = 't'; u.textContent = (m.unit ? ' ' + m.unit : '') + (m.unit ? '' : ' ' + m.name.toLowerCase());
+      vv.append(k, b, u);
+    }
+    tip.appendChild(vv);
+    if (r && r.any_simulated) { const t = document.createElement('div'); t.className = 't'; t.textContent = 'Simulated or test data'; tip.appendChild(t); }
+    tip.hidden = false;
+    const tw = tip.offsetWidth, x = X(i);
+    tip.style.left = Math.max(0, Math.min(W - tw, x + 12 + tw > W ? x - 12 - tw : x + 12)) + 'px';
+  };
+  const hide = () => { cur = -1; tip.hidden = true; wash.setAttribute('opacity', '0');
+    if (xh) xh.setAttribute('opacity', '0'); if (dot) dot.setAttribute('opacity', '0');
+    svg.querySelectorAll('.bar').forEach(b => b.setAttribute('opacity', '.9')); };
+  const at = e => { const x = e.clientX - svg.getBoundingClientRect().left; show(Math.floor((x - L) / slot)); };
+  svg.addEventListener('pointermove', at); svg.addEventListener('pointerdown', at);
+  svg.addEventListener('pointerleave', () => { if (document.activeElement !== plot) hide(); });
+  plot.addEventListener('blur', hide);
+  plot.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); show(cur < 0 ? n - 1 : cur + (e.key === 'ArrowRight' ? 1 : -1)); }
+    else if (e.key === 'Escape') hide();
+  });
+}
+
+function trendTable(win, byDay) {
+  const rows = win.map(d => byDay[d]).filter(Boolean);
+  const wrap = document.createElement('div'); wrap.className = 'scroll';
+  const tb = document.createElement('table');
+  const head = ['Day','Data','Heart rate median (bpm)','Breathing rate median (breaths/min)','Walking speed (m/s, approx.)','Possible-fall alerts','Inactivity alerts'];
+  tb.innerHTML = '<caption class="sub" style="text-align:left;padding-bottom:4px">Daily values for the selected camera and range</caption><thead><tr>' + head.map(h => `<th>${esc(h)}</th>`).join('') + '</tr></thead>';
+  const body = document.createElement('tbody');
+  for (const r of rows.slice().reverse()) {
+    const tr = document.createElement('tr');
+    [r.day, r.any_simulated ? 'Simulated or test' : 'Live', r.hr_median, r.br_median, r.gait_speed, r.n_falls, r.n_inactivity].forEach((c, i) => {
+      const td = document.createElement('td'); if (i > 1) td.className = 'num'; td.textContent = c == null ? '—' : String(c); tr.appendChild(td); });
+    body.appendChild(tr);
+  }
+  tb.appendChild(body); wrap.appendChild(tb); return wrap;
+}
+
+let trSeq = 0, trRedraw = null, trLastW = 0, trRaf = 0;
+const trRO = window.ResizeObserver ? new ResizeObserver(() => {   // one observer for the whole page
+  const g = document.getElementById('trcharts');
+  if (!g || !trRedraw || g.clientWidth === trLastW) return;
+  trLastW = g.clientWidth; cancelAnimationFrame(trRaf); trRaf = requestAnimationFrame(() => trRedraw && trRedraw());
+}) : null;
+function renderTrends() {
+  if (trRO) trRO.disconnect();
+  trRedraw = null;
+  const body = document.getElementById('trbody');
+  const filters = document.getElementById('trfilters');
+  filters.hidden = !TR.cams.length;
+  if (!TR.cams.length) { body.innerHTML = `<p class="sub">${TREND_EMPTY}</p>`; return; }
+  const t = new Date(), end = dayNum(`${t.getFullYear()}-${t.getMonth() + 1}-${t.getDate()}`), win = [];
+  for (let d = end - TR.range + 1; d <= end; d++) win.push(dayStr(d));
+  const byDay = {};
+  for (const r of TR.rows) if (r.camera_id === TR.cam) byDay[r.day] = r;
+  const inWin = win.filter(d => byDay[d]).length;
+  document.querySelectorAll('#trrange button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.d === TR.range)));
+  const tbtn = document.getElementById('trtable');
+  tbtn.setAttribute('aria-pressed', String(TR.table)); tbtn.textContent = TR.table ? 'Show charts' : 'Table view';
+  if (!TR.rows.some(r => r.camera_id === TR.cam && dayNum(r.day) >= end - TR.range + 1 && dayNum(r.day) <= end)) {
+    body.innerHTML = `<p class="sub" id="trnone">No recordings from this camera in the last ${TR.range} days.</p>`; return; }
+  if (inWin < 2) { body.innerHTML = `<p class="sub" id="trempty">${TREND_EMPTY}</p>`; return; }
+  const color = `var(--cam-${TR.cams.indexOf(TR.cam) % 8})`;
+  body.replaceChildren();
+  trRedraw = null;
+  const sim = win.some(d => byDay[d] && byDay[d].any_simulated);
+  if (TR.table) {
+    body.appendChild(trendTable(win, byDay));
+  } else {
+    const grid = document.createElement('div'); grid.className = 'charts'; grid.id = 'trcharts'; body.appendChild(grid);
+    const draw = () => { if (!grid.isConnected) return; grid.replaceChildren(); const u = ++trSeq; const plots = MEASURES.map(m => trendShell(grid, m)); MEASURES.forEach((m, i) => trendChart(plots[i], m, win, byDay, color, u + '_' + i)); };
+    draw();
+    trLastW = grid.clientWidth; trRedraw = draw;
+    if (trRO) trRO.observe(grid);
+  }
+  if (sim) {
+    const k = document.createElement('div'); k.className = 'trkey';
+    k.innerHTML = '<svg width="18" height="14" aria-hidden="true"><defs><pattern id="hk" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--viz-hatch)" stroke-width="1.5" opacity=".45"/></pattern></defs><rect width="18" height="14" fill="url(#hk)" style="stroke:var(--viz-axis)"/></svg> Hatched days include simulated or test data.';
+    body.appendChild(k);
+  }
+  const note = document.createElement('div'); note.className = 'sub trnote';
+  note.textContent = `Camera: ${TR.cam} · ending today (${dayLabel(dayStr(end))}). Heart and breathing rates are camera estimates; walking speed is approximate. Days without recordings are left blank.`;
+  body.appendChild(note);
+}
+async function loadTrends() {
+  let rows = [];
+  try { rows = await (await fetch('/api/rollups')).json(); } catch (e) { /* leave empty state */ }
+  TR.rows = rows; TR.cams = [...new Set(rows.map(r => r.camera_id))].sort();
+  if (!TR.cams.includes(TR.cam)) TR.cam = TR.cams[0] || null;
+  const sel = document.getElementById('trcam');
+  sel.innerHTML = TR.cams.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = TR.cam || '';
+  renderTrends();
+}
+document.getElementById('trcam').onchange = e => { TR.cam = e.target.value; renderTrends(); };
+document.getElementById('trrange').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) { TR.range = +b.dataset.d; renderTrends(); } });
+document.getElementById('trtable').onclick = () => { TR.table = !TR.table; renderTrends(); };
 
 const ALERT_TITLES = {fall:'Possible fall \u2014 check-in suggested',
   inactivity:'Long period without movement \u2014 check-in suggested',
@@ -161,12 +414,14 @@ document.getElementById('alerts').addEventListener('click', e => {
 
 (async () => {
   loadAlerts(); setInterval(loadAlerts, 15000);
-  const runs = await (await fetch('/api/runs')).json();
+  loadHistory();
+  loadTrends();
+  let runs = [];
+  try { runs = await (await fetch('/api/runs')).json(); } catch (e) { /* trends and history are independent */ }
   const sel = document.getElementById('run');
   sel.innerHTML = runs.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.start_time)}${r.data_label !== 'live' ? ' (' + esc(r.data_label) + ')' : ''}</option>`).join('');
   sel.onchange = () => load(sel.value);
   if (runs.length) load(runs[0].id);  // newest first
-  loadHistory();
 })();
 </script>
 </body>

@@ -2,10 +2,12 @@
 
 Binds to localhost only. Nothing is sent anywhere."""
 import argparse
+import datetime
 import hmac
 import io
 import ipaddress
 import os
+import re
 import sqlite3
 import sys
 from collections import OrderedDict
@@ -113,7 +115,16 @@ def create_app(out_dir: str, db_path: str | None = None, env_dir=None,
 
     @app.get("/api/rollups")
     def rollups():
-        return jsonify(read(lambda s: s.daily_rollups(), []))
+        cam = request.args.get("camera_id") or None
+        since = request.args.get("since_day") or None
+        if since is not None:
+            try:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+                    raise ValueError
+                datetime.date.fromisoformat(since)
+            except ValueError:
+                abort(400)
+        return jsonify(read(lambda s: s.daily_rollups(camera_id=cam, since_day=since), []))
 
     @app.get("/api/alerts")
     def alerts():

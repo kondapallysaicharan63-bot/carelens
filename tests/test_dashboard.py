@@ -186,3 +186,39 @@ def test_alerts_api_on_unmigrated_db_and_unacked_beyond_limit(tmp_path, monkeypa
             st.add_alert("cam", "fall", {}, 1000.0 + i, "w", "sent")
     d = create_app(str(out2)).test_client().get("/api/alerts").get_json()
     assert len(d["alerts"]) == 200 and d["unacked"] == 205
+
+
+# ---- daily trends (F14) ---------------------------------------------------------------------
+def _seed_rollups(out):
+    with Store(out / "carelens.db") as st:
+        for cam, day in (("cam1", "2026-11-01"), ("cam1", "2026-11-05"), ("cam2", "2026-11-05")):
+            st.db.execute("INSERT INTO daily_rollups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                          (day, cam, 1, 70.0, 15.0, 0.9, 0, 1, 1.0, 1.0, 1.0, 0, 0.0))
+        st.db.commit()
+
+
+def test_rollups_filter_by_camera_and_since_day(tmp_path):
+    out = tmp_path / "out"
+    _seed_rollups(out)
+    c = create_app(str(out)).test_client()
+    assert len(c.get("/api/rollups").get_json()) == 3
+    assert {r["camera_id"] for r in c.get("/api/rollups?camera_id=cam1").get_json()} == {"cam1"}
+    assert [r["day"] for r in c.get("/api/rollups?since_day=2026-11-05").get_json()] == ["2026-11-05"] * 2
+    both = c.get("/api/rollups?camera_id=cam2&since_day=2026-11-02").get_json()
+    assert [(r["camera_id"], r["day"]) for r in both] == [("cam2", "2026-11-05")]
+    assert c.get("/api/rollups?since_day=notaday").status_code == 400
+    assert c.get("/api/rollups?since_day=20261101").status_code == 400
+
+
+def test_index_is_local_only_and_has_trend_section():
+    import re
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboard" / "static" / "index.html").read_text()
+    assert not re.search(r"""(?:src|href)\s*=\s*["']?(?:https?:)?//""", html, re.I)
+    assert not re.search(r"@import|url\(\s*[\"']?https?:", html, re.I)
+    assert 'id="trends"' in html and 'id="trtable"' in html
+    assert "Not enough data for trends yet \u2014 trends need several days of recordings." in html
+    assert "Wellness trends &mdash; not a diagnosis. A sustained change may be worth a check-in." in html
+    for bad in ("diagnos", "emergency detected", "fall confirmed", "confirmed fall"):
+        # the only permitted use of the stem is the negated disclaimer
+        assert all("not a diagnosis" in m for m in re.findall(r"[^.\n]*" + bad + r"[^.\n]*", html, re.I)), bad
