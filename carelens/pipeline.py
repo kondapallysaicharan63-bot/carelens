@@ -6,6 +6,7 @@ import json
 import sqlite3
 import statistics
 import sys
+import tempfile
 import threading
 from collections import deque
 from dataclasses import dataclass, asdict, field, replace
@@ -16,6 +17,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
+from .cliplock import ClipLockError, encrypt_file, load_key
 from .config import AppConfig, StorageConfig, load_config, redact_url, resolve_source, runtime_env
 from .events import ActivityTimeline, Event, FallDetector, GaitAnalyzer, InactivityDetector
 from .features import FeatureExtractor
@@ -95,7 +97,8 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         start_time: Optional[datetime] = None, max_seconds: Optional[float] = None,
         clip_name: str = "clip", store=None, camera_id: str = "default",
         source_kind: Optional[str] = None,
-        on_event: Optional[Callable[[dict], None]] = None) -> dict:
+        on_event: Optional[Callable[[dict], None]] = None,
+        clip_key: Optional[bytes] = None, clip_tmp_dir: str | Path | None = None) -> dict:
     """`on_event(event_dict)` is called for every event as it is raised (camera_offline at outage
     ONSET, from the capture thread; others from this thread) - the hook for alerting."""
     out = Path(out_dir)
@@ -211,8 +214,22 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
                 ev = det.update(s, held=True) if (held and det is fall) else det.update(s)
                 if ev:
                     name = f"{clip_name}_{ev.kind}_{int(ev.t_onset)}s.mp4"
-                    ev.clip = buf.write(out / "clips" / name, ev.t_onset - cfg.clip_pre_s,
-                                        ev.t_confirmed, src.fps, ev.kind.upper(), measure=live)
+                    wdir = Path(clip_tmp_dir) if (clip_key and clip_tmp_dir) else out / "clips"
+                    try:   # clips are written synchronously: never left half-done
+                        wdir.mkdir(parents=True, exist_ok=True)
+                        ev.clip = buf.write(wdir / name, ev.t_onset - cfg.clip_pre_s,
+                                            ev.t_confirmed, src.fps, ev.kind.upper(), measure=live)
+                        if ev.clip and clip_key:
+                            ev.clip = encrypt_file(wdir / name, clip_key, out / "clips").name
+                    except Exception as e:   # the event is still raised; never keep plaintext
+                        for junk in (wdir / name, out / "clips" / (name + ".enc"),
+                                     out / "clips" / (name + ".enc.tmp")):
+                            try:
+                                junk.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                        ev.clip = None
+                        print(f"warning: clip not saved ({type(e).__name__})", file=sys.stderr)
                     _raise(ev.to_dict())
             last_t = fr.t
     finally:
@@ -402,6 +419,28 @@ def main(argv=None):
     except (OSError, sqlite3.Error, RuntimeError) as e:
         pose.close()
         raise SystemExit(f"error: could not open database {Path(out) / storage.db_path}: {e}")
+    clip_key, tmp_dir = None, None
+    if storage.encrypt_clips:   # before any camera is opened
+        cfg_dir = Path(a.config).resolve().parent
+        try:
+            clip_key = load_key(runtime_env(cfg_dir / ".env").get(storage.clip_key_env, ""))
+            if storage.clip_tmp_dir:   # relative paths are config-relative
+                tmp_dir = (cfg_dir / storage.clip_tmp_dir).resolve()
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=tmp_dir):
+                    pass
+            sw = store.sweep_orphan_clips(Path(out) / "clips", tmp_dir,
+                                          retention_days=storage.retention_days)
+            if any(sw.values()):
+                print(f"note: removed orphan clip files {sw}", file=sys.stderr)
+        except ClipLockError as e:
+            store.close()
+            pose.close()
+            raise SystemExit(f"error: storage.encrypt_clips is on but {storage.clip_key_env}: {e}")
+        except OSError as e:
+            store.close()
+            pose.close()
+            raise SystemExit(f"error: storage.clip_tmp_dir is not usable: {e}")
     sinks = None
     # opt-in; --camera runs only; simulated/test runs never page anyone unless include_non_live
     if cam is not None and app_cfg.alerts.enabled and (
@@ -434,7 +473,8 @@ def main(argv=None):
     try:
         res = run(source, pose, out, cfg, start_time=start, max_seconds=a.max_seconds,
                   clip_name=name, store=store, camera_id=camera_id, source_kind=kind,
-                  on_event=(lambda e: disp.submit(camera_id, e)) if disp else None)
+                  on_event=(lambda e: disp.submit(camera_id, e)) if disp else None,
+                  clip_key=clip_key, clip_tmp_dir=tmp_dir)
         try:
             keep = store.latest_run_id(camera_id, name)
             purged = store.purge(retention_days=storage.retention_days,

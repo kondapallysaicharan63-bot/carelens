@@ -87,6 +87,9 @@ class StorageConfig(_Strict):
     retention_days: int = Field(7, ge=1)
     db_path: str = "carelens.db"          # relative to out_dir
     rollup_retention_days: int = Field(365, ge=1)
+    encrypt_clips: bool = False           # AES-256-GCM at rest; recommended for real deployments
+    clip_key_env: str = "CARELENS_CLIP_KEY"
+    clip_tmp_dir: Optional[str] = None    # e.g. a tmpfs dir for the brief plaintext; default: clips dir
 
 
 class DashboardConfig(_Strict):

@@ -90,7 +90,7 @@ async function load(id) {
   // events
   document.getElementById('events').innerHTML = r.events.length ? r.events.map(e =>
     `<div class="ev ${esc(e.kind)}"><b>${{fall:'Possible fall', inactivity:'Inactivity', camera_offline:'Camera offline'}[e.kind] || esc(e.kind)}</b> at ${fmt(e.t_onset)} (confirmed ${fmt(e.t_confirmed)})<br>${esc(e.message)}
-     ${e.clip ? `<br><video src="/clips/${encodeURIComponent(e.clip)}" controls muted></video>` : ''}</div>`).join('')
+     ${e.clip ? `<br><button data-clip="${esc(e.clip)}" onclick="playClip(this)">Load clip</button>` : ''}</div>`).join('')
     : '<p class="sub">No events in this recording.</p>';
   document.getElementById('hrstat').innerHTML = statBlock(r.heart_rate.summary, 'bpm');
   document.getElementById('hr').innerHTML = lineChart(r.heart_rate.windows, {lo:40, hi:140, unit:'bpm'});
@@ -116,6 +116,20 @@ const ALERT_TITLES = {fall:'Possible fall \u2014 check-in suggested',
   inactivity:'Long period without movement \u2014 check-in suggested',
   camera_offline:'Camera offline \u2014 check the camera'};
 let dashToken = null;
+async function playClip(btn) {   // clips need the same access check as writes: send the header, play from a blob
+  const get = () => fetch(`/clips/${encodeURIComponent(btn.dataset.clip)}`,
+    {headers: dashToken ? {'X-CareLens-Token': dashToken} : {}});
+  let r = await get();
+  if (r.status === 403) {
+    const t = prompt('Dashboard token (CARELENS_DASH_TOKEN) is needed to view clips:');
+    if (t) { dashToken = t; r = await get(); }
+  }
+  if (!r.ok) { btn.textContent = 'Clip unavailable (' + r.status + ')'; return; }
+  const v = document.createElement('video');
+  v.src = URL.createObjectURL(await r.blob());
+  v.controls = true; v.muted = true;
+  btn.replaceWith(v);
+}
 async function alertPost(id, action) {
   const go = () => fetch(`/api/alerts/${encodeURIComponent(id)}/${action}`,
     {method:'POST', headers: dashToken ? {'X-CareLens-Token': dashToken} : {}});

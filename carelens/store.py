@@ -338,6 +338,35 @@ class Store:
         return {"runs": len(old), "files": files, "rollups": n_roll,
                 "kept_excluded": len(due) - len(old)}
 
+    def sweep_orphan_clips(self, clips_dir: str | Path, tmp_dir: str | Path | None = None,
+                           retention_days: int = 7, now: Optional[float] = None) -> dict:
+        """Remove clip files no event row references (e.g. left by a crash mid-encryption).
+        Orphan plaintext .mp4 and *.tmp partials go at once (in `clips_dir` and `tmp_dir`);
+        orphan .enc files go once older than the retention window. Path-guarded."""
+        now = self.clock() if now is None else now
+        base = Path(clips_dir).resolve()
+        if not base.is_dir():
+            return {"plaintext": 0, "partial": 0, "encrypted": 0}
+        refs = {(base / r["clip_path"]).resolve() for r in self.db.execute(
+            "SELECT clip_path FROM events WHERE clip_path IS NOT NULL")}
+        n = {"plaintext": 0, "partial": 0, "encrypted": 0}
+        dirs = [base] + ([Path(tmp_dir).resolve()] if tmp_dir else [])
+        for d in dirs:
+            for f in d.iterdir() if d.is_dir() else ():
+                if not f.is_file() or f.is_symlink() or f.resolve() in refs:
+                    continue
+                if f.suffix == ".tmp" or f.name.endswith(".enc.tmp"):
+                    kind = "partial"
+                elif f.suffix == ".mp4":
+                    kind = "plaintext"
+                elif f.suffix == ".enc" and d == base and \
+                        f.stat().st_mtime < now - retention_days * 86400:
+                    kind = "encrypted"
+                else:
+                    continue
+                n[kind] += self._unlink_inside(d, f)
+        return n
+
     @staticmethod
     def _export_of(out_dir: Path, run) -> Path:
         p = run["export_path"] or f"{run['name']}_results.json"

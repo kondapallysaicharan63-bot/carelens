@@ -43,8 +43,19 @@ feature, not an afterthought — and it's the strongest story for the portfolio.
 
 ## 4. Data at rest
 
-- **Event clips**: short, low-res, under `output/clips/`. Encrypt the store (LUKS volume
-  or per-file encryption with a key in the OS keyring).
+- **Event clips**: short, low-res, under `output/clips/`. Set `storage.encrypt_clips: true`
+  (off by default, recommended for real deployments) to store each clip as `<name>.mp4.enc`
+  (AES-256-GCM, file name bound as associated data). Make a key with
+  `python -m carelens.cliplock genkey` and put it in `.env` as `CARELENS_CLIP_KEY` (name set by
+  `storage.clip_key_env`); the tool never writes it to disk, and clips are unrecoverable without
+  it. Runs refuse to start if encryption is on and the key is missing/invalid. The dashboard
+  decrypts in memory on `/clips/<name>.enc` (403 without a key, 409 on a bad/foreign/tampered
+  file). Limits: the plaintext clip exists briefly before encryption and unlink is not a secure
+  erase on flash, so **also use full-disk encryption (LUKS)**; `storage.clip_tmp_dir` can point
+  that brief write at a tmpfs. Files over 200 MB are refused. Purge deletes `.enc` clips like any other;
+  a startup sweep removes orphan plaintext clips left by an interrupted run. The dashboard reads
+  `clip_key_env` from `--config` (or `./config.yaml` if present) and serves **all** clips, plain or
+  encrypted, only with a valid `X-CareLens-Token` or to a loopback client.
 - **Retention**: auto-purge clips older than N days (proposed default 7). Keep derived
   daily rollups in SQLite (no imagery) longer for trends.
 - **Results JSON**: contains timestamps, postures, rates — treat as health data; same

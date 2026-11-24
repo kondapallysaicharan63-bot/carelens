@@ -124,6 +124,8 @@ privacy point for the portfolio.
 
 - **Wellness wording only** — "trend", "check-in suggested". Never "diagnosis".
 - **Consented or synthetic footage only.** Never use footage of anyone who has not agreed.
+- Optional clip encryption at rest: `storage.encrypt_clips: true` + `CARELENS_CLIP_KEY` in `.env`
+  (`python -m carelens.cliplock genkey`); see `docs/04-SECURITY-PRIVACY.md` §4. Use LUKS too.
 - The dashboard binds to `127.0.0.1` and shows a persistent test-data banner.
 - All dependencies are permissively licensed (MIT / Apache-2.0 / BSD); see `LICENSE`.
 

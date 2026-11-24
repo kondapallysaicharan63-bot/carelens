@@ -3,21 +3,25 @@
 Binds to localhost only. Nothing is sent anywhere."""
 import argparse
 import hmac
+import io
 import ipaddress
 import os
 import sqlite3
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, request, send_from_directory, abort
+from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # so `python dashboard/app.py` finds the carelens package
+from carelens.cliplock import KEY_ENV, ClipLockError, decrypt_to_bytes, load_key  # noqa: E402
 from carelens.config import runtime_env  # noqa: E402
 from carelens.store import Store  # noqa: E402
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_CACHE_MAX_CLIPS, _CACHE_MAX_BYTES = 2, 256 * 2**20
 _ALERT_STATUSES = {"pending", "sent", "failed", "suppressed"}
 
 
@@ -42,8 +46,17 @@ def dash_token(env_dir=None) -> str:
     return runtime_env(Path(env_dir or ".") / ".env").get("CARELENS_DASH_TOKEN", "")
 
 
+def clip_key_env_for(config_path=None) -> str:
+    """Env var name holding the clip key: from --config, else ./config.yaml if present."""
+    p = Path(config_path) if config_path else Path("config.yaml")
+    if config_path or p.is_file():
+        from carelens.config import load_config
+        return load_config(p).storage.clip_key_env
+    return KEY_ENV
+
+
 def create_app(out_dir: str, db_path: str | None = None, env_dir=None,
-               allowed_origins=()) -> Flask:
+               allowed_origins=(), clip_key_env: str = KEY_ENV) -> Flask:
     out = Path(out_dir).resolve()
     db = out / (db_path or "carelens.db")  # a relative path is relative to out_dir
     app = Flask(__name__, static_folder=str(HERE / "static"))
@@ -142,9 +155,40 @@ def create_app(out_dir: str, db_path: str | None = None, env_dir=None,
     def alert_false_alarm(alert_id):
         return write_alert("mark_false_alarm", alert_id)
 
+    cache: OrderedDict = OrderedDict()   # decrypted clips, so range/seek requests don't re-decrypt
+
+    def decrypted(p: Path, key: bytes) -> bytes:
+        st = p.stat()
+        k = (str(p), st.st_mtime_ns, st.st_size, key[:4])
+        if k in cache:
+            cache.move_to_end(k)
+            return cache[k]
+        data = decrypt_to_bytes(p, key)
+        cache[k] = data
+        while len(cache) > _CACHE_MAX_CLIPS or (
+                len(cache) > 1 and sum(map(len, cache.values())) > _CACHE_MAX_BYTES):
+            cache.popitem(last=False)
+        return data
+
     @app.get("/clips/<path:name>")
     def clip(name):
-        return send_from_directory(out / "clips", name)
+        if not write_allowed():   # clips are the most sensitive data: same gate as writes
+            return jsonify({"error": "dashboard token required"}), 403
+        if not name.endswith(".enc"):
+            return send_from_directory(out / "clips", name)
+        base = (out / "clips").resolve()
+        p = (base / name).resolve()
+        if p.parent != base or not p.is_file():
+            abort(404)
+        try:
+            key = load_key(runtime_env(Path(env_dir or ".") / ".env").get(clip_key_env, ""))
+        except ClipLockError:
+            return jsonify({"error": "clip is encrypted and no valid key is configured"}), 403
+        try:
+            data = decrypted(p, key)
+        except ClipLockError as e:
+            return jsonify({"error": str(e)}), 409
+        return send_file(io.BytesIO(data), mimetype="video/mp4", conditional=True)
 
     return app
 
@@ -165,7 +209,9 @@ if __name__ == "__main__":
         db = db or st.db_path
     env_dir = Path(a.config).resolve().parent if a.config else None
     origins = load_config(a.config).dashboard.allowed_origins if a.config else []
+    clip_key_env = clip_key_env_for(a.config)
     warn = bind_warning(a.host, bool(dash_token(env_dir)))
     if warn:
         print(warn, file=sys.stderr)
-    create_app(out or "output", db, env_dir, origins).run(host=a.host, port=a.port)
+    create_app(out or "output", db, env_dir, origins,
+               clip_key_env=clip_key_env).run(host=a.host, port=a.port)
