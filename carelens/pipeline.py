@@ -402,6 +402,17 @@ def main(argv=None):
     except (OSError, sqlite3.Error, RuntimeError) as e:
         pose.close()
         raise SystemExit(f"error: could not open database {Path(out) / storage.db_path}: {e}")
+    sinks = None
+    # opt-in; --camera runs only; simulated/test runs never page anyone unless include_non_live
+    if cam is not None and app_cfg.alerts.enabled and (
+            cfg.data_label == "live" or app_cfg.alerts.include_non_live):
+        from .alerts import build_sinks
+        try:   # before any camera is opened; messages are pre-redacted (no URL path/userinfo/token)
+            sinks = build_sinks(app_cfg.alerts, runtime_env(base / ".env"))
+        except ValueError as e:
+            store.close()
+            pose.close()
+            raise SystemExit(f"error: {e}")
     if cam is not None:
         label = redact_url(str(source))
         try:
@@ -415,9 +426,15 @@ def main(argv=None):
             pose.close()
             raise SystemExit(f"error: could not open camera {cam.id!r} ({label})")
         source = OrientedSource(vs, cam.orientation, label)
+    disp = None
+    if sinks is not None:
+        from .alerts import AlertDispatcher
+        disp = AlertDispatcher(Path(out) / storage.db_path, app_cfg.alerts, sinks,
+                               {c.id: c.room for c in app_cfg.cameras}, data_label=cfg.data_label)
     try:
         res = run(source, pose, out, cfg, start_time=start, max_seconds=a.max_seconds,
-                  clip_name=name, store=store, camera_id=camera_id, source_kind=kind)
+                  clip_name=name, store=store, camera_id=camera_id, source_kind=kind,
+                  on_event=(lambda e: disp.submit(camera_id, e)) if disp else None)
         try:
             keep = store.latest_run_id(camera_id, name)
             purged = store.purge(retention_days=storage.retention_days,
@@ -430,6 +447,8 @@ def main(argv=None):
         except Exception as e:  # a purge problem must not hide a successful run
             print(f"warning: retention purge failed: {e}", file=sys.stderr)
     finally:
+        if disp is not None:
+            disp.close()
         store.close()
         pose.close()
     print(json.dumps({"events": res["events"], "heart_rate": res["heart_rate"]["summary"],

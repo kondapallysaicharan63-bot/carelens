@@ -27,11 +27,17 @@
   table { border-collapse:collapse; width:100%; font-size:13px; }
   td, th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; }
   svg text { font-size:10px; fill:var(--muted); }
+  .alerts { background:#fff1f0; border-bottom:1px solid #f0b4ae; padding:8px 20px; }
+  .alerts:empty { display:none; }
+  .alert { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:4px 0; }
+  .alert button { font:inherit; padding:3px 10px; cursor:pointer; }
+  footer { padding:8px 20px 24px; color:var(--muted); font-size:12px; }
   video { width:100%; max-width:360px; margin-top:6px; border-radius:6px; }
 </style>
 </head>
 <body>
 <div class="banner" id="banner">Simulated or test data</div>
+<div class="alerts" id="alerts" role="status" aria-live="polite"></div>
 <header><h1>Room wellness monitor</h1><select id="run"></select>
   <span class="sub">Wellness trends only, not a diagnosis.</span></header>
 <main>
@@ -44,6 +50,7 @@
   <section class="card"><h2>Walking (approximate)</h2><div id="gait"></div></section>
   <section class="card wide"><h2>Trend across recordings</h2><div id="history"></div></section>
 </main>
+<footer>Wellness aid &mdash; not for emergencies. <span id="falsealarms"></span></footer>
 <script>
 const COLORS = {sitting:'var(--sit)', standing:'var(--stand)', walking:'var(--walk)', lying:'var(--lie)', absent:'var(--absent)'};
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -105,7 +112,41 @@ async function loadHistory() {
     : '<p class="sub">No recordings yet.</p>';
 }
 
+const ALERT_TITLES = {fall:'Possible fall \u2014 check-in suggested',
+  inactivity:'Long period without movement \u2014 check-in suggested',
+  camera_offline:'Camera offline \u2014 check the camera'};
+let dashToken = null;
+async function alertPost(id, action) {
+  const go = () => fetch(`/api/alerts/${encodeURIComponent(id)}/${action}`,
+    {method:'POST', headers: dashToken ? {'X-CareLens-Token': dashToken} : {}});
+  let r = await go();
+  if (r.status === 403) {   // remote viewers need the dashboard token
+    const t = prompt('Dashboard token (CARELENS_DASH_TOKEN) is needed to record this:');
+    if (t) { dashToken = t; r = await go(); }
+  }
+  loadAlerts();
+}
+async function loadAlerts() {
+  let d;
+  try { d = await (await fetch('/api/alerts?since=' + (Date.now()/1000 - 7*86400))).json(); } catch (e) { return; }
+  const open = d.alerts.filter(a => !a.acknowledged);
+  document.getElementById('alerts').innerHTML = open.map(a => {
+    const st = a.status === 'suppressed' ? ' (not sent)' : a.status === 'failed' ? ' (delivery failed)' : '';
+    return `<div class="alert"><b>${esc(ALERT_TITLES[a.kind] || a.kind)}</b>
+      <span>${esc(a.camera_id)} \u00b7 ${esc(a.created)}${st}</span>
+      <button data-id="${esc(a.id)}" data-act="ack">Acknowledge</button>
+      ${a.kind === 'fall' ? `<button data-id="${esc(a.id)}" data-act="false-alarm">Not a fall</button>` : ''}</div>`;
+  }).join('');
+  const days = Object.entries(d.false_alarms_per_day || {});
+  document.getElementById('falsealarms').textContent = days.length
+    ? 'Marked "not a fall" per day: ' + days.map(([k, v]) => `${k}: ${v}`).join(', ') : '';
+}
+document.getElementById('alerts').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) alertPost(b.dataset.id, b.dataset.act);
+});
+
 (async () => {
+  loadAlerts(); setInterval(loadAlerts, 15000);
   const runs = await (await fetch('/api/runs')).json();
   const sel = document.getElementById('run');
   sel.innerHTML = runs.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.start_time)}${r.data_label !== 'live' ? ' (' + esc(r.data_label) + ')' : ''}</option>`).join('');

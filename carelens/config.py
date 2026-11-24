@@ -92,6 +92,60 @@ class StorageConfig(_Strict):
 class DashboardConfig(_Strict):
     host: str = "127.0.0.1"
     port: int = 5000
+    # Browser origins (e.g. "https://carelens.example.org") allowed to POST alert feedback when
+    # the dashboard sits behind a reverse proxy. Only used together with CARELENS_DASH_TOKEN.
+    allowed_origins: list[str] = []
+
+
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+AlertKind = Literal["fall", "inactivity", "camera_offline"]
+_ALL_KINDS: list[str] = ["fall", "inactivity", "camera_offline"]
+
+
+class QuietHours(_Strict):
+    """Local-time window (may wrap midnight) in which only *inactivity* alerts are held back."""
+    start: str
+    end: str
+
+    @field_validator("start", "end")
+    @classmethod
+    def _hhmm(cls, v):
+        if not _HHMM.match(v):
+            raise ValueError("must be HH:MM (24 h)")
+        return v
+
+    @model_validator(mode="after")
+    def _differ(self):
+        if self.start == self.end:
+            raise ValueError("start and end must differ")
+        return self
+
+
+class AlertSinkConfig(_Strict):
+    """One notification target. The webhook URL/token are never in the file: ``url_env`` and
+    ``token_env`` name environment variables (or .env entries)."""
+    type: Literal["webhook", "desktop"]
+    url_env: Optional[str] = None
+    token_env: Optional[str] = None
+    kinds: list[AlertKind] = Field(default_factory=lambda: list(_ALL_KINDS))
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.type == "webhook" and not self.url_env:
+            raise ValueError("webhook sink requires url_env (name of the env var holding the URL)")
+        return self
+
+
+class AlertsConfig(_Strict):
+    enabled: bool = False
+    include_non_live: bool = False   # simulated/test runs never page caregivers unless true
+    sinks: list[AlertSinkConfig] = []
+    dedupe_window_s: float = Field(900, ge=0)
+    allow_public_hosts: list[str] = []
+    quiet_hours: dict[str, QuietHours] = {}
+    max_attempts: int = Field(8, ge=1)
+    backoff_base_s: float = Field(30, ge=0)
+    backoff_max_s: float = Field(3600, ge=0)
 
 
 class AppConfig(_Strict):
@@ -99,6 +153,15 @@ class AppConfig(_Strict):
     thresholds: Thresholds = Thresholds()
     storage: StorageConfig = StorageConfig()
     dashboard: DashboardConfig = DashboardConfig()
+    alerts: AlertsConfig = AlertsConfig()
+
+    @model_validator(mode="after")
+    def _quiet_cams(self):
+        known = {c.id for c in self.cameras}
+        bad = sorted(set(self.alerts.quiet_hours) - known)
+        if bad:
+            raise ValueError(f"alerts.quiet_hours names unknown camera id(s): {bad}")
+        return self
 
     @field_validator("cameras")
     @classmethod

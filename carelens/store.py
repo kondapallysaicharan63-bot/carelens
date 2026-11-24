@@ -77,6 +77,25 @@ MIGRATIONS: list[list[str]] = [
         "CREATE INDEX idx_gait_run ON gait_segments(run_id)",
         "CREATE INDEX idx_gait_ts ON gait_segments(ts)",
     ],
+    [
+        """CREATE TABLE alerts (
+            id INTEGER PRIMARY KEY,
+            camera_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+            event_json TEXT,
+            created_ts REAL NOT NULL,
+            sink TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL CHECK (status IN ('pending','sent','failed','suppressed')),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_ts REAL,
+            last_error TEXT,
+            acknowledged_ts REAL,
+            false_alarm INTEGER NOT NULL DEFAULT 0,
+            feedback_ts REAL)""",
+        "CREATE INDEX idx_alerts_due ON alerts(status, next_attempt_ts)",
+        "CREATE INDEX idx_alerts_dedupe ON alerts(camera_id, kind, created_ts)",
+    ],
 ]
 
 _POSTURES = ("sitting", "standing", "walking", "lying", "absent")
@@ -314,6 +333,8 @@ class Store:
                              _local_offset_min(now - rollup_retention_days * 86400))
         with self._tx() as db:
             n_roll = db.execute("DELETE FROM daily_rollups WHERE day < ?", (cutoff_day,)).rowcount
+            db.execute("DELETE FROM alerts WHERE created_ts < ?",
+                       (now - rollup_retention_days * 86400,))
         return {"runs": len(old), "files": files, "rollups": n_roll,
                 "kept_excluded": len(due) - len(old)}
 
@@ -424,6 +445,118 @@ class Store:
         if since_day is not None:
             sql, args = sql + " AND day>=?", args + [since_day]
         return [dict(r) for r in self.db.execute(sql + " ORDER BY day, camera_id", args)]
+
+    # ---- alerts -----------------------------------------------------------------------
+    def add_alert(self, camera_id: str, kind: str, event: dict, created_ts: float, sink: str,
+                  status: str, next_attempt_ts: Optional[float] = None,
+                  last_error: Optional[str] = None, run_id: Optional[int] = None) -> int:
+        cur = self.db.execute(
+            "INSERT INTO alerts (camera_id,kind,run_id,event_json,created_ts,sink,status,"
+            "next_attempt_ts,last_error) VALUES (?,?,?,?,?,?,?,?,?)",
+            (camera_id, kind, run_id, json.dumps(event, default=str), created_ts, sink, status,
+             next_attempt_ts, last_error))
+        return cur.lastrowid
+
+    def recent_alert_exists(self, camera_id: str, kind: str, since_ts: float) -> bool:
+        """Only alerts that were (or will be) delivered count: a quiet-hours or no-sink
+        'suppressed' row, or a failed one, must not hide a later real alert."""
+        return self.db.execute("SELECT 1 FROM alerts WHERE camera_id=? AND kind=? AND created_ts>? "
+                               "AND status IN ('pending','sent') LIMIT 1",
+                               (camera_id, kind, since_ts)).fetchone() is not None
+
+    def due_alerts(self, now: float, limit: int = 50, exclude_sinks: Iterable[str] = ()) -> list[dict]:
+        """Due pending rows: fewest attempts first, then newest first (fresh alerts are never
+        starved by old retries)."""
+        ex = list(exclude_sinks)
+        skip = f" AND sink NOT IN ({','.join('?' * len(ex))})" if ex else ""
+        rows = self.db.execute("SELECT * FROM alerts WHERE status='pending' AND "
+                               f"COALESCE(next_attempt_ts,0)<=?{skip} "
+                               "ORDER BY attempts, created_ts DESC, id LIMIT ?",
+                               (now, *ex, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_alert(self, alert_id: int, status: str, attempts: Optional[int] = None,
+                   next_attempt_ts: Optional[float] = None, last_error: Optional[str] = None):
+        self.db.execute("UPDATE alerts SET status=?, attempts=COALESCE(?,attempts), "
+                        "next_attempt_ts=?, last_error=? WHERE id=?",
+                        (status, attempts, next_attempt_ts, last_error, alert_id))
+
+    def claim_alert(self, alert_id: int, now: float, lease_s: float) -> bool:
+        """Atomically lease a due pending row (so two processes never both send it)."""
+        return self.db.execute(
+            "UPDATE alerts SET next_attempt_ts=? WHERE id=? AND status='pending' AND "
+            "COALESCE(next_attempt_ts,0)<=?", (now + lease_s, alert_id, now)).rowcount == 1
+
+    def _group_ids(self, alert_id: int) -> list[int]:
+        r = self.db.execute("SELECT camera_id,kind,created_ts FROM alerts WHERE id=?",
+                            (alert_id,)).fetchone()
+        if not r:
+            return []
+        return [x["id"] for x in self.db.execute(
+            "SELECT id FROM alerts WHERE camera_id=? AND kind=? AND created_ts=?",
+            (r["camera_id"], r["kind"], r["created_ts"]))]
+
+    def ack_alert(self, alert_id: int, now: Optional[float] = None) -> bool:
+        """Acknowledge an alert (all sink rows of the same alert). False if it does not exist."""
+        ids, now = self._group_ids(alert_id), self.clock() if now is None else now
+        for i in ids:
+            self.db.execute("UPDATE alerts SET acknowledged_ts=COALESCE(acknowledged_ts,?) "
+                            "WHERE id=?", (now, i))
+        return bool(ids)
+
+    def mark_false_alarm(self, alert_id: int, now: Optional[float] = None) -> bool:
+        """Record 'not a fall' feedback (also acknowledges). Recorded only; nothing is auto-tuned."""
+        ids, now = self._group_ids(alert_id), self.clock() if now is None else now
+        for i in ids:
+            self.db.execute("UPDATE alerts SET false_alarm=1, feedback_ts=?, "
+                            "acknowledged_ts=COALESCE(acknowledged_ts,?) WHERE id=?", (now, now, i))
+        return bool(ids)
+
+    def list_alerts(self, since_ts: Optional[float] = None, status: Optional[str] = None,
+                    limit: int = 200) -> list[dict]:
+        """One entry per alert (camera_id, kind, created_ts), merging its per-sink rows. Newest first.
+        `status` filters on the merged status (pending > sent > failed > suppressed)."""
+        sql, args = "SELECT * FROM alerts", []
+        if since_ts is not None:
+            sql, args = sql + " WHERE created_ts>=?", [since_ts]
+        groups: dict = {}
+        for r in self.db.execute(sql + " ORDER BY created_ts DESC, id", args):
+            g = groups.setdefault((r["camera_id"], r["kind"], r["created_ts"]), {
+                "id": r["id"], "camera_id": r["camera_id"], "kind": r["kind"],
+                "run_id": r["run_id"], "created_ts": r["created_ts"],
+                "created": _local_iso(r["created_ts"], _local_offset_min(r["created_ts"])),
+                "event": json.loads(r["event_json"]) if r["event_json"] else None,
+                "sinks": [], "acknowledged_ts": None, "false_alarm": False})
+            g["sinks"].append({"sink": r["sink"], "status": r["status"], "attempts": r["attempts"],
+                               "last_error": r["last_error"]})
+            g["acknowledged_ts"] = g["acknowledged_ts"] or r["acknowledged_ts"]
+            g["false_alarm"] = g["false_alarm"] or bool(r["false_alarm"])
+        out = []
+        for g in groups.values():
+            sts = {x["status"] for x in g["sinks"]}
+            g["status"] = next(x for x in ("pending", "sent", "failed", "suppressed") if x in sts)
+            g["acknowledged"] = g["acknowledged_ts"] is not None
+            if status is None or g["status"] == status:
+                out.append(g)
+        return out[:limit]
+
+    def unacked_count(self, since_ts: Optional[float] = None) -> int:
+        """Alerts (not sink rows) with no acknowledgement; independent of any list limit."""
+        w, args = ("WHERE created_ts>=? ", [since_ts]) if since_ts is not None else ("", [])
+        return self.db.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 FROM alerts {w}GROUP BY camera_id,kind,created_ts "
+            "HAVING MAX(acknowledged_ts) IS NULL)", args).fetchone()[0]
+
+    def false_alarms_per_day(self, since_ts: Optional[float] = None) -> dict[str, int]:
+        """Alerts marked 'not a fall', counted per local calendar day of the alert."""
+        sql, args = "SELECT camera_id,kind,created_ts FROM alerts WHERE false_alarm=1", []
+        if since_ts is not None:
+            sql, args = sql + " AND created_ts>=?", [since_ts]
+        days: dict[str, int] = {}
+        for r in self.db.execute(sql + " GROUP BY camera_id,kind,created_ts", args):
+            d = _day_of(r["created_ts"], _local_offset_min(r["created_ts"]))
+            days[d] = days.get(d, 0) + 1
+        return dict(sorted(days.items()))
 
 
 def main(argv=None):

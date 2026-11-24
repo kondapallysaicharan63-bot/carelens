@@ -95,9 +95,12 @@ standards-based cameras, clip-based for the cloud ones.
 
 ### 4.5 Alerting
 - **P1** Local notifications on fall/inactivity (dashboard banner + optional desktop/webhook).
+  *(built, F10: opt-in `alerts:` config; webhook/desktop sinks with retry/backoff, dedupe,
+  quiet hours for inactivity only, acknowledge + "not a fall" feedback recorded, never auto-tuned.)*
 - **P2** Caregiver escalation via the user's **own** channel (SMS/Telegram/email) — opt-in,
   keys supplied by the user, never a built-in cloud.
 - **P1** Configurable thresholds per camera (fall stillness, inactivity minutes, quiet hours).
+  *(quiet hours built per camera under `alerts.quiet_hours`; they never silence falls or camera-offline.)*
 
 ### 4.6 Dashboard & storage
 - **P0** Local web dashboard: timeline, events + clips, HR/BR trends, cross-recording

@@ -45,3 +45,17 @@ storage:
 dashboard:
   host: 127.0.0.1
   port: 5000
+
+# Caregiver alerts: OPT-IN and off by default. No URLs or keys here: sinks name env vars (.env).
+# alerts:
+#   enabled: true
+#   dedupe_window_s: 900            # same camera + kind within this window -> one alert
+#   quiet_hours:                    # holds back ONLY inactivity alerts; falls/offline always go out
+#     demo: {start: "22:00", end: "07:00"}
+#   allow_public_hosts: []          # webhooks must be on the LAN unless the host is listed here
+#   sinks:
+#     - type: webhook
+#       url_env: ALERT_WEBHOOK_URL
+#       token_env: ALERT_WEBHOOK_TOKEN   # optional; sent as Authorization: Bearer
+#       kinds: [fall, inactivity, camera_offline]
+#     - type: desktop                    # notify-send on Linux

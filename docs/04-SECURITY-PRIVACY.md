@@ -31,6 +31,13 @@ feature, not an afterthought — and it's the strongest story for the portfolio.
 - CSI/USB cameras: no network at all (best).
 - RTSP cameras: keep the camera on an isolated VLAN/guest network; the Jetson reaches it
   on the LAN; neither needs WAN.
+- **Alerts are opt-in** (`alerts.enabled: false` by default). The only outbound traffic is a
+  user-configured webhook POST (5 s timeout, no redirects, no env proxies). Webhook URLs must be
+  on the LAN (private/loopback/`.local`) unless the host is listed in `alerts.allow_public_hosts`;
+  URLs with embedded credentials are rejected. URL and bearer token come from env vars
+  (`url_env`/`token_env`), never the config file, and are redacted from logs and stored errors.
+  Payloads carry the camera id, room, a fixed wellness-worded title, time, clip name and a
+  "not a medical device / not for emergencies" disclaimer: no imagery or vitals.
 - If the caregiver needs remote view: do **not** port-forward. Use a private overlay
   (e.g. WireGuard/Tailscale) to reach the dashboard, still behind auth.
 
@@ -48,6 +55,17 @@ feature, not an afterthought — and it's the strongest story for the portfolio.
 - v0: localhost only, no auth (single-user on the device).
 - LAN/remote: front with nginx/Caddy → require login (basic auth or a simple token), serve
   over TLS (self-signed or internal CA). Rate-limit. Never expose `/clips/` without auth.
+- Alert writes (`POST /api/alerts/<id>/ack|false-alarm`): if `CARELENS_DASH_TOKEN` is set the
+  `X-CareLens-Token` header must match (constant-time compare, same-origin only); if unset, only
+  loopback clients with a localhost `Origin` (or none) are accepted, others get 403. The dashboard
+  warns at startup when bound to a non-loopback host without a token. Bodies are capped at 4 KB.
+- Behind a reverse proxy (Caddy/nginx) the browser's `Origin` is the public name, not the
+  dashboard's bind address. `X-Forwarded-*` headers are deliberately **not** trusted; list the
+  public origin(s) in `dashboard.allowed_origins` (or `CARELENS_DASH_ORIGINS`, comma-separated),
+  e.g. `https://carelens.example.org`. They are honoured only when `CARELENS_DASH_TOKEN` is set.
+  The token may live in `.env` next to the config (the process environment wins).
+- Alerts only fire for runs labelled `live`; simulated/test runs stay silent unless
+  `alerts.include_non_live: true`, and then the title is prefixed `[TEST]`.
 - Path-traversal guard already enforced in `dashboard/app.py` (keep the test).
 
 ## 6. Consent & compliance posture
