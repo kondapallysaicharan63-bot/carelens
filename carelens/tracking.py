@@ -90,6 +90,17 @@ class PresenceTracker:
         self._last_out = None
         self._core = None
 
+    def skip_gap(self, gap_s: float):
+        """Camera unobserved for `gap_s`: reset the smoothing filters but keep presence state,
+        as if no time had passed (no re-entry debounce). If the person really left, the normal
+        hold_s -> absent path applies on the following frames."""
+        self._filt.reset()
+        self._core = None
+        if self._last_t is not None:
+            self._last_t += gap_s
+        if self._first_t is not None:
+            self._first_t += gap_s
+
     def update(self, t: float, lm: Optional[np.ndarray], aspect: float = 1.0):
         c = self.cfg
         if lm is None:

@@ -44,6 +44,12 @@ class FeatureExtractor:
         self._motion_hist: deque = deque()
         self._x_hist: deque = deque()
 
+    def reset(self):
+        """Forget motion history (camera outage): the next frame has no previous pose."""
+        self._prev = None
+        self._x_hist.clear()
+        self._motion_hist.clear()
+
     def update(self, t: float, lm: Optional[np.ndarray]) -> BodyState:
         if lm is None or lm[CORE, 2].mean() < self.min_vis:
             self._prev = None

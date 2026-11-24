@@ -76,7 +76,9 @@ caregiver alerting (LAN-local).
 
 ## 5. Concurrency model (target for on-device)
 
-v0 is single-threaded (fine for clips). For live capture, target a small pipeline:
+v0 is single-threaded for clips (`VideoSource`). Live sources use `LiveSource` (built, P2.6): a capture
+thread feeds a drop-old buffer consumed by the inference loop (`run()`), with auto-reconnect and a
+stall watchdog (see `05-CAMERA-INTEGRATION.md` section 4). The full target pipeline:
 
 ```
 [capture thread] → frame queue (drop-old) → [inference thread] → state queue → [detectors+sinks]

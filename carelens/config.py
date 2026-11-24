@@ -53,6 +53,9 @@ class CameraConfig(_Strict):
     thresholds: Optional[Thresholds] = None
     rtsp_transport: Literal["tcp", "udp"] = "tcp"  # only used for rtsp sources
     open_timeout_s: float = Field(10.0, gt=0, le=300)
+    # live sources only: give up (end + save the run, so a service manager can restart it) after
+    # the camera has been unreachable this long. None = retry forever.
+    max_outage_s: Optional[float] = Field(None, gt=0)
 
     @model_validator(mode="after")
     def _check_source(self):

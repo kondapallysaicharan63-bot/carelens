@@ -61,6 +61,17 @@ class FallDetector:
                         "drop_time_s": round(dt, 2)}
         return None
 
+    def pause(self, gap_s: float):
+        """The camera was unobserved for `gap_s` seconds (timestamps jumped by that much).
+        Unobserved time must neither count as stillness nor erase a pending fall: the pending
+        state is kept, and the gap is excluded from the stillness and timeout clocks."""
+        self._hist.clear()           # pre-gap samples must not pair with post-gap ones
+        if self._pending is not None:
+            self._pending["gap"] += gap_s
+            self._pending["gap_total"] += gap_s
+            self._pending["last_t"] += gap_s    # the jump is not "absent time"
+            self._pending["post_gap"] = True    # from now on only PRESENT frames count as still
+
     def update(self, s: BodyState, held: bool = False) -> Optional[Event]:
         """held=True: `s` is a carried-forward state (pose dropout bridged by the tracker).
         It is not a measurement, so it never enters the drop history or triggers a drop;
@@ -80,22 +91,30 @@ class FallDetector:
             if self._armed and s.present and not held:
                 info = self._sudden_drop(s)
                 if info:
-                    self._pending = {"t_onset": s.t, "still_start": s.t, "info": info}
+                    self._pending = {"t_onset": s.t, "still_start": s.t, "info": info,
+                                     "gap": 0.0, "gap_total": 0.0,
+                                     "last_t": s.t, "post_gap": False}
                     self._armed = False
             return None
 
         p = self._pending
-        if s.t - p["t_onset"] > self.pending_timeout_s:
+        if s.t - p["t_onset"] - p["gap_total"] > self.pending_timeout_s:
             self._pending = None
             return None
+        dt, p["last_t"] = s.t - p["last_t"], s.t
+        if p["post_gap"] and not s.present:
+            # After an outage, an empty room neither confirms nor counts toward a fall: whether
+            # the person is still on the floor is unknown until they are seen again.
+            p["gap"] += dt
         if s.present and s.motion > self.still_motion:
-            p["still_start"] = s.t        # moving: restart stillness timer
-        if s.t - p["still_start"] >= self.still_seconds:
+            p["still_start"], p["gap"] = s.t, 0.0   # moving: restart stillness timer
+        still = s.t - p["still_start"] - p["gap"]   # observed stillness only
+        if still >= self.still_seconds:
             self._pending = None
             return Event(kind="fall", t_onset=round(p["t_onset"], 2), t_confirmed=round(s.t, 2),
                          message="Possible fall: sudden drop followed by little movement. "
                                  "Check-in suggested.",
-                         details={**p["info"], "still_for_s": round(s.t - p["still_start"], 1)})
+                         details={**p["info"], "still_for_s": round(still, 1)})
         return None
 
 
@@ -106,15 +125,21 @@ class InactivityDetector:
         self.seconds = seconds
         self.still_motion = still_motion
         self._start: Optional[float] = None
+        self._gap = 0.0      # unobserved seconds since _start (excluded from the timer)
         self._fired = False
+
+    def pause(self, gap_s: float):
+        """Camera unobserved for `gap_s`: that time does not count toward inactivity."""
+        if self._start is not None:
+            self._gap += gap_s
 
     def update(self, s: BodyState) -> Optional[Event]:
         if not s.present or s.motion > self.still_motion:
-            self._start, self._fired = None, False
+            self._start, self._gap, self._fired = None, 0.0, False
             return None
         if self._start is None:
             self._start = s.t
-        if not self._fired and s.t - self._start >= self.seconds:
+        if not self._fired and s.t - self._start - self._gap >= self.seconds:
             self._fired = True
             return Event(kind="inactivity", t_onset=round(self._start, 2), t_confirmed=round(s.t, 2),
                          message=f"No meaningful movement for {self.seconds/60:.1f} min while "
@@ -182,6 +207,11 @@ class GaitAnalyzer:
             "speed_cv": round(float(speeds.std() / (speeds.mean() + 1e-6)), 3),
             "trunk_sway_deg": round(float(angles.std()), 2),
         })
+
+    def break_segment(self):
+        """Close the open walking segment (e.g. across a camera outage)."""
+        if self._cur:
+            self._close()
 
     def finish(self):
         if self._cur:

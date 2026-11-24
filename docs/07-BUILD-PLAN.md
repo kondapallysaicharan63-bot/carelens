@@ -55,6 +55,8 @@ encrypted clip store (F11), dashboard trend charts over rollups (F14), accuracy 
 10. **Autostart service** — `systemd` unit runs the pipeline on boot for a configured
     camera; dashboard service on localhost. *Accept:* reboot → pipeline + dashboard come
     up; logs to journald.
+- **Follow-up (from P2.6):** live runs persist only at run end — add periodic segment
+  rotation/checkpointing (e.g. hourly) so a long-running service writes to SQLite continuously.
 11. **Camera bring-up** — validate CSI, USB, and one RTSP camera end to end on-device.
     *Accept:* each source produces events + vitals on a live/looped feed.
 

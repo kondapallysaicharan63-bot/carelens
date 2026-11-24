@@ -4,20 +4,22 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import statistics
 import sys
+import threading
 from collections import deque
 from dataclasses import dataclass, asdict, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
 
 from .config import AppConfig, StorageConfig, load_config, redact_url, resolve_source, runtime_env
-from .events import ActivityTimeline, FallDetector, GaitAnalyzer, InactivityDetector
+from .events import ActivityTimeline, Event, FallDetector, GaitAnalyzer, InactivityDetector
 from .features import FeatureExtractor
-from .sources import VideoSource
+from .sources import LiveSource, VideoSource
 from .tracking import PresenceTracker, TrackingConfig
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
@@ -56,10 +58,17 @@ class _ClipBuffer:
         while self.frames and self.frames[0][0] < t - self.seconds:
             self.frames.popleft()
 
-    def write(self, path: Path, t0: float, t1: float, fps: float, label: str) -> Optional[str]:
+    def write(self, path: Path, t0: float, t1: float, fps: float, label: str,
+              measure: bool = False) -> Optional[str]:
         sel = [(t, j) for t, j in self.frames if t0 <= t <= t1]
         if not sel:
             return None
+        if measure and len(sel) > 2:
+            # live: frames can be dropped under load, so the nominal fps would play too fast.
+            # Median spacing is robust to an outage inside the clip window.
+            dts = [b[0] - a[0] for a, b in zip(sel, sel[1:]) if b[0] > a[0]]
+            if dts:
+                fps = min(60.0, max(1.0, 1.0 / statistics.median(dts)))
         first = cv2.imdecode(sel[0][1], cv2.IMREAD_COLOR)
         h, w = first.shape[:2]
         vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
@@ -85,10 +94,18 @@ def _summary(estimates):
 def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
         start_time: Optional[datetime] = None, max_seconds: Optional[float] = None,
         clip_name: str = "clip", store=None, camera_id: str = "default",
-        source_kind: Optional[str] = None) -> dict:
+        source_kind: Optional[str] = None,
+        on_event: Optional[Callable[[dict], None]] = None) -> dict:
+    """`on_event(event_dict)` is called for every event as it is raised (camera_offline at outage
+    ONSET, from the capture thread; others from this thread) - the hook for alerting."""
     out = Path(out_dir)
     (out / "clips").mkdir(parents=True, exist_ok=True)
-    src = source if hasattr(source, "fps") else VideoSource(source, max_seconds=max_seconds)
+    if hasattr(source, "fps"):
+        src = source
+    elif infer_source_kind(source) in LIVE_KINDS:
+        src = LiveSource(source, max_seconds=max_seconds)
+    else:
+        src = VideoSource(source, max_seconds=max_seconds)
     start_time = start_time or datetime.now().replace(microsecond=0)
 
     feats: Optional[FeatureExtractor] = None
@@ -103,40 +120,110 @@ def run(source, pose_provider, out_dir: str | Path, cfg: Config = Config(),
     s = None
 
     events, postures = [], []
+    ev_lock = threading.Lock()
+    open_off: list = []        # at most one open camera_offline event dict
     last_t = 0.0
-    for fr in src:
-        if feats is None:
-            feats = FeatureExtractor(aspect=fr.image.shape[1] / fr.image.shape[0])
-        lm = pose_provider.process(fr.image, fr.t)
-        held = False
-        if tracker is not None:
-            lm, held = tracker.update(fr.t, lm, fr.image.shape[1] / fr.image.shape[0])
-        if held and s is not None:
-            # Bridged dropout: carry forward the last *measured* state (incl. its motion) so a
-            # held pose never counts as stillness; only the timestamp advances.
-            s = replace(s, t=fr.t)
-        else:
-            s = feats.update(fr.t, lm)
-        buf.add(fr.t, fr.image)
-        timeline.update(s)
-        if held:   # held poses are not measurements: reset vitals as an absent frame did pre-tracker
-            hr._reset()
-            br._reset()
-        else:
-            gait.update(s)
-            hr.update(fr.t, fr.image, s)
-            br.update(fr.t, fr.image, s)
-        if fr.index % max(1, int(src.fps)) == 0:
-            postures.append({"t": round(fr.t, 1), "posture": s.posture,
-                             "motion": round(s.motion, 3)})
-        for det in (fall, inact):
-            ev = det.update(s, held=True) if (held and det is fall) else det.update(s)
-            if ev:
-                name = f"{clip_name}_{ev.kind}_{int(ev.t_onset)}s.mp4"
-                ev.clip = buf.write(out / "clips" / name, ev.t_onset - cfg.clip_pre_s,
-                                    ev.t_confirmed, src.fps, ev.kind.upper())
-                events.append(ev.to_dict())
-        last_t = fr.t
+    live = bool(getattr(src, "is_live", False))
+    last_sec = -1
+    stall_s = getattr(src, "stall_s", 5.0)
+    hooked = hasattr(src, "set_event_hook")
+
+    def _raise(ev: dict):
+        with ev_lock:
+            events.append(ev)
+        if on_event:
+            try:
+                on_event(ev)
+            except Exception as e:
+                print(f"warning: on_event hook failed ({type(e).__name__})", file=sys.stderr)
+
+    def _close_offline(duration: float):
+        ev = open_off.pop()
+        with ev_lock:
+            ev["details"]["duration_s"] = round(duration, 1)
+            ev["t_confirmed"] = round(ev["t_onset"] + duration, 2)
+            ev["message"] = f"Camera offline for {duration:.0f} s - check the camera"
+
+    def _camera_event(info: dict):    # capture thread
+        if info["type"] == "outage_started":
+            ev = Event(kind="camera_offline", t_onset=round(info["t_onset"], 2),
+                       t_confirmed=round(info["t_onset"], 2),
+                       message="Camera offline - check the camera",
+                       details={"duration_s": None}).to_dict()
+            open_off.append(ev)
+            _raise(ev)
+        elif info["type"] == "outage_ended" and open_off:
+            _close_offline(info["duration_s"])
+
+    if hooked:
+        src.set_event_hook(_camera_event)
+    try:
+        for fr in src:
+            gap = getattr(fr, "gap_before_s", 0.0)
+            if gap > 0:
+                # Live outage: nothing was observed for `gap` s. The tracker keeps its presence
+                # state (no re-entry debounce) but loses its filters; motion/gait/vitals state is
+                # reset; and the detectors exclude the gap from stillness (a pending fall survives).
+                if tracker is not None:
+                    tracker.skip_gap(gap)
+                if feats is not None:
+                    feats.reset()
+                gait.break_segment()
+                hr._reset()
+                br._reset()
+                fall.pause(gap)
+                inact.pause(gap)
+                if gap >= stall_s and not hooked:
+                    _raise(Event(
+                        kind="camera_offline", t_onset=round(fr.t - gap, 2),
+                        t_confirmed=round(fr.t, 2),
+                        message=f"Camera offline for {gap:.0f} s - check the camera",
+                        details={"duration_s": round(gap, 1)}).to_dict())
+            if feats is None:
+                feats = FeatureExtractor(aspect=fr.image.shape[1] / fr.image.shape[0])
+            lm = pose_provider.process(fr.image, fr.t)
+            held = False
+            if tracker is not None:
+                lm, held = tracker.update(fr.t, lm, fr.image.shape[1] / fr.image.shape[0])
+            if held and s is not None:
+                # Bridged dropout: carry forward the last *measured* state (incl. its motion) so a
+                # held pose never counts as stillness; only the timestamp advances.
+                s = replace(s, t=fr.t)
+            else:
+                s = feats.update(fr.t, lm)
+            buf.add(fr.t, fr.image)
+            timeline.update(s)
+            if held:   # held poses are not measurements: reset vitals as an absent frame did pre-tracker
+                hr._reset()
+                br._reset()
+            else:
+                gait.update(s)
+                hr.update(fr.t, fr.image, s)
+                br.update(fr.t, fr.image, s)
+            if live:   # frames may be dropped: sample by elapsed time, not frame index
+                sample, last_sec = int(fr.t) > last_sec, max(last_sec, int(fr.t))
+            else:
+                sample = fr.index % max(1, int(src.fps)) == 0
+            if sample:
+                postures.append({"t": round(fr.t, 1), "posture": s.posture,
+                                 "motion": round(s.motion, 3)})
+            for det in (fall, inact):
+                ev = det.update(s, held=True) if (held and det is fall) else det.update(s)
+                if ev:
+                    name = f"{clip_name}_{ev.kind}_{int(ev.t_onset)}s.mp4"
+                    ev.clip = buf.write(out / "clips" / name, ev.t_onset - cfg.clip_pre_s,
+                                        ev.t_confirmed, src.fps, ev.kind.upper(), measure=live)
+                    _raise(ev.to_dict())
+            last_t = fr.t
+    finally:
+        if hasattr(src, "close"):   # live sources: stop the capture thread on any exit
+            src.close()
+        if hooked:
+            src.set_event_hook(None)
+    if open_off:   # the iteration ended while the camera was still down: finalize the outage
+        end_t = max(last_t, getattr(src, "elapsed_s", lambda: last_t)())
+        _close_offline(max(0.0, end_t - open_off[0]["t_onset"]))
+        last_t = end_t
 
     results = {
         "banner": LIVE_BANNER if cfg.data_label == "live" else BANNER,
@@ -178,6 +265,19 @@ class OrientedSource:
     def __init__(self, src: VideoSource, orientation: int, label: str, resize_width: int | None = 640):
         self._src, self.orientation, self.source = src, orientation, label
         self.fps, self.resize_width = src.fps, resize_width
+
+    def __getattr__(self, name):   # live counters/status/stall_s of a wrapped LiveSource
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._src, name)
+
+    def close(self):
+        if hasattr(self._src, "close"):
+            self._src.close()
+
+    def set_event_hook(self, hook):
+        if hasattr(self._src, "set_event_hook"):
+            self._src.set_event_hook(hook)
 
     def __iter__(self):
         for fr in self._src:
@@ -305,8 +405,11 @@ def main(argv=None):
     if cam is not None:
         label = redact_url(str(source))
         try:
-            vs = VideoSource(source, max_seconds=a.max_seconds, resize_width=None,
-                             rtsp_transport=cam.rtsp_transport, open_timeout_s=cam.open_timeout_s)
+            # live cameras: threaded, reconnecting source; files stay deterministic/synchronous
+            extra = {"max_outage_s": cam.max_outage_s} if kind in LIVE_KINDS else {}
+            vs = (LiveSource if kind in LIVE_KINDS else VideoSource)(
+                source, max_seconds=a.max_seconds, resize_width=None,
+                rtsp_transport=cam.rtsp_transport, open_timeout_s=cam.open_timeout_s, **extra)
         except IOError:
             store.close()
             pose.close()

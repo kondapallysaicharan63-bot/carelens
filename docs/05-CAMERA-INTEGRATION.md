@@ -47,13 +47,26 @@ cameras (Roku/Blink/Nest) do not appear and remain clip-export only. Cameras dec
 
 ## 4. Reliability requirements (live sources)
 
-The current `VideoSource` opens once and iterates. For live RTSP/Wi-Fi, add:
-- **Auto-reconnect** with backoff when `cap.read()` fails or the stream stalls.
-- **Watchdog**: if no frame for T seconds, tear down and reopen.
-- **Frame-drop under load**: keep only the latest frame for inference (drop-old queue).
-- **Timestamp source**: wall-clock for live (already handled via `is_live`).
+Live kinds (usb/rtsp/csi) use `LiveSource` (`carelens/sources.py`); files keep the synchronous
+`VideoSource` (deterministic, never drops frames). `LiveSource` provides:
+- **Threaded capture** into a 2-slot latest-frame buffer; when inference is slower the OLDEST frame
+  is dropped (`frames_dropped`), so latency stays bounded (`last_latency_s`).
+- **Auto-reconnect** with exponential backoff (0.5 s, x2, cap 30 s, +-20 % jitter, forever) on a
+  failed open/read, plus a **stall watchdog** (no frame for `stall_s`, default 5 s).
+- **Timestamps**: monotonic seconds since start, stamped at capture time.
+- **Gaps**: the first frame after an outage has `Frame.gap_before_s` > 0. `run()` resets tracker and
+  vitals, and calls `pause(gap)` on the fall/inactivity detectors so unobserved time never counts
+  as stillness and a pending fall survives. Outages >= `stall_s` are recorded as `camera_offline`
+  events ("Camera offline for N s - check the camera"); they are not counted as falls/inactivity.
+- **Outage reporting**: once an outage lasts `stall_s`, `run()` records a `camera_offline` event at
+  its ONSET (and calls the `on_event` hook, for alerting) and fills in the duration on recovery or at
+  run end. Optional `max_outage_s` (camera config) ends and saves the run so a service manager can
+  restart it. A frame that `read()` returns is never discarded; the first read per connection gets
+  extra time (keyframe wait) before stall rules apply.
+- `status` (`connecting|up|down`), `reconnects`, optional `on_status` callback. URLs are always redacted.
 
-These are build tasks in `07-BUILD-PLAN.md` phase P2.
+Limitation: the watchdog runs in the capture thread, so a `read()` that never returns is bounded
+only by the backend's read timeout (set for RTSP; USB/CSI have none).
 
 ## 5. PTZ control (ONVIF)
 
