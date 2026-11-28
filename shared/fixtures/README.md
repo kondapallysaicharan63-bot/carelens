@@ -14,12 +14,21 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 |---|---|---|
 | `roi_trace_hr` | `fps`, `green[]` (face-ROI mean green per frame), `brightness` (ROI mean, number or per-frame list), `motion` (body-sizes/s, number or list), `truth_bpm` | Per frame at `t=i/fps`: if `motion > still_motion` or brightness outside `[min_brightness, max_brightness]` reset the window and skip; else push `green`. Emit window estimates as `HeartRateEstimator`. |
 | `chest_trace_breathing` | `fps`, `chest_y_px[]` (cumulative chest vertical displacement per frame), `truth_breaths_per_min` | Push each sample; emit estimates as `BreathingRateEstimator`. |
+| `ppg_contact` | `t[]` (s), `r[]`, `g[]`, `b[]` (mean of the central ROI per frame, 0-255), `clip_frac[]` (fraction of ROI pixels with R >= 250), `truth_bpm` (inputs rounded to 4 dp) | Feed frames one by one to `ContactPPG.update(t, r, g, b, clip_frac)`; collect each non-null output (one per `contact_ppg.step_s`). Design and gates: `carelens/ppg.py` docstring. |
 | `landmarks` | `fps`, `aspect`, `landmark_indices` (MediaPipe indices), `landmarks[frame][k] = [x, y, visibility]` (x normalised by width, y by height; unlisted landmarks are visibility 0.2; `null` = no person), optional `config` overrides | `FeatureExtractor` -> `FallDetector` + `InactivityDetector`, no tracker. |
 
 ## Expected outputs
 
 - vitals fixtures: `expected.estimates[] = {t, value (bpm), quality, reported, brightness?}`. Compare
   count, `t`, `value` (`value_bpm`), `quality`, and the **`reported` gate decision**.
+- `ppg_contact` fixtures: `expected.updates[] = {t, bpm, bpm_ibi, quality, reported, reason, snr, pi, channel}`
+  (`bpm`/`bpm_ibi` are null until a window is analysed; `reason` is one of `ok`, `no_finger`, `saturated`,
+  `settling`, `low_signal`, `disagree`, `gaps`) and `expected.final_ibis_ms[]` (inter-beat intervals of the last
+  analysed window). Compare update count, `t`, `bpm`/`bpm_ibi` (0.3 bpm), `quality` (0.03), `snr`, `pi`, and
+  **`reported` and `reason` exactly**; IBIs within 5 ms (same count).
+  Quality = 0.5 q_snr + 0.3 q_agree + 0.2 q_pi, each in [0, 1]: q_snr rises linearly in dB from `min_snr` (0)
+  to `q_snr_full_db` (1); q_agree = 1 - |bpm_spectral - bpm_ibi| / `agree_bpm`; q_pi is a trapezoid, 0 at `pi_min`,
+  1 on [`q_pi_full_lo`, `q_pi_full_hi`], 0 at `pi_max`.
 - `landmarks` fixtures: `expected.events[] = {kind, t_onset, t_confirmed, trigger}` (compare count,
   kind, times within `event_time_s`) and `expected.features_1hz[]` (one entry per second:
   posture, torso angle, motion).
@@ -30,3 +39,7 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 `hr_green_low_light` (brightness gate trips at 30 s), `breathing_{10,15,20}bpm`,
 `fall_sudden` (one fall), `fall_slow_lie_down` (no event), `inactivity_sit_still`
 (`config.inactivity_seconds = 30`).
+
+`ppg_clean_{60,90,150}bpm`, `ppg_jitter_drops` (+-8 ms jitter, 5 % dropped frames, 0.3 s hiccup),
+`ppg_motion_burst` (25-31 s: `no_finger`/`settling`, then `ok`), `ppg_saturation` (20-32 s: `saturated`),
+`ppg_finger_lift` (20-28 s: `no_finger`), `ppg_harmonic_trap` (2nd harmonic stronger than the fundamental).

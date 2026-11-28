@@ -1,7 +1,9 @@
 // Parity registry + comparison for shared/fixtures (DOM-free, no node imports).
 // Each TS implementation of a Python-reference algorithm is imported HERE and registered by fixture
 // name, so every vitest file sees the same map (a registry inside a test file is per-file).
-// Empty until the W1+ ports land. Not a medical device.
+// Not a medical device.
+
+import { runContactPpg } from './ppg';
 
 export interface Fixture {
   name: string;
@@ -15,13 +17,24 @@ export interface Fixture {
 
 export type Implementation = (fx: Fixture, params: any) => any;
 
-// e.g. import { contactPpg } from './ppg'; ... 'ppg_contact_72bpm': (fx, p) => contactPpg(fx.input, p),
-export const IMPLEMENTATIONS: Record<string, Implementation> = {};
+const ppgContact: Implementation = (fx, params) => runContactPpg(fx.input, params.contact_ppg);
+
+export const IMPLEMENTATIONS: Record<string, Implementation> = {
+  ppg_clean_60bpm: ppgContact,
+  ppg_clean_90bpm: ppgContact,
+  ppg_clean_150bpm: ppgContact,
+  ppg_jitter_drops: ppgContact,
+  ppg_motion_burst: ppgContact,
+  ppg_saturation: ppgContact,
+  ppg_finger_lift: ppgContact,
+  ppg_harmonic_trap: ppgContact,
+};
 
 const TOL_KEYS: Record<string, [string, number]> = {
   value: ['value_bpm', 0.5], quality: ['quality', 0.05], t: ['t_s', 0.05],
   t_onset: ['event_time_s', 0.1], t_confirmed: ['event_time_s', 0.1],
   torso_angle_deg: ['torso_angle_deg', 0.05], motion: ['motion', 0.01],
+  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01],
 };
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 

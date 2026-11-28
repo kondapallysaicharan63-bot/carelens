@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
@@ -14,7 +15,8 @@ function devInlineStyles(): Plugin {
 export default defineConfig({
   base: process.env.CARELENS_BASE ?? '/',
   plugins: [basicSsl(), devInlineStyles()],
-  server: { host: true },
+  // fs.allow: this directory plus shared/ only (params.json is imported from there); nothing else in the repo is served
+  server: { host: true, fs: { allow: [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../shared', import.meta.url))] } },
   preview: { host: true },
   build: { target: 'es2022', sourcemap: false },
 });

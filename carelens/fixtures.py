@@ -23,6 +23,7 @@ from . import pose as P
 from .events import FallDetector, InactivityDetector
 from .features import FeatureExtractor
 from .params import PARAMS
+from .ppg import run_contact_ppg, synth_trace
 from .synth import ASPECT, Scenario, Segment
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
@@ -110,10 +111,13 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "roi_trace_hr": run_hr_trace,
     "chest_trace_breathing": run_breathing_trace,
     "landmarks": run_landmarks,
+    "ppg_contact": run_contact_ppg,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
               "estimate_count": "exact"}
+TOL_PPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01,
+           "reported": "exact", "reason": "exact", "update_count": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -168,6 +172,13 @@ def _lm(name, desc, segs, seed, config=None, fps=15.0):
     return _fixture(name, desc, "landmarks", inp, TOL_EVENTS)
 
 
+def _ppg(name, desc, dur=40.0, bpm=72.0, seed=0, **kw):
+    tr = synth_trace(dur, bpm, seed=seed, **kw)
+    inp = {k: [round(v, 4) for v in tr[k]] for k in ("t", "r", "g", "b", "clip_frac")}
+    inp["truth_bpm"] = bpm
+    return _fixture(name, desc, "ppg_contact", inp, TOL_PPG)
+
+
 def generate_all() -> dict[str, str]:
     fx = [
         _hr("hr_green_60bpm", 60, 11, "Green-channel ROI mean, 60 bpm, noise."),
@@ -194,6 +205,19 @@ def generate_all() -> dict[str, str]:
         _lm("inactivity_sit_still", "Walk then sit still 40 s with inactivity_seconds=30: one inactivity event.",
             [Segment("walk", 2, x0=0.2, x1=0.5), Segment("still", 40, posture="sit", x0=0.5)], 33,
             config={"inactivity_seconds": 30.0}),
+        _ppg("ppg_clean_60bpm", "Fingertip PPG (mean R/G/B per frame, 30 fps), 60 bpm, clean.", 40, 60, 101),
+        _ppg("ppg_clean_90bpm", "Fingertip PPG, 90 bpm, clean.", 40, 90, 102),
+        _ppg("ppg_clean_150bpm", "Fingertip PPG, 150 bpm, clean.", 40, 150, 103),
+        _ppg("ppg_jitter_drops", "72 bpm; +-8 ms frame jitter, 5% dropped frames, a 0.3 s hiccup at 25 s.",
+             45, 72, 104, jitter_s=0.008, drop_frac=0.05, hiccup=(25.0, 0.3)),
+        _ppg("ppg_motion_burst", "72 bpm; motion burst 25-31 s: no_finger/settling, then ok again after settle.",
+             60, 72, 105, events=[(25.0, 31.0, "burst")]),
+        _ppg("ppg_saturation", "72 bpm; torch saturates the sensor 20-32 s: saturated, then recovers.",
+             55, 72, 106, events=[(20.0, 32.0, "saturate")]),
+        _ppg("ppg_finger_lift", "72 bpm; finger lifted 20-28 s: no_finger, then settling and ok.",
+             55, 72, 107, events=[(20.0, 28.0, "lift")]),
+        _ppg("ppg_harmonic_trap", "52 bpm with a 2nd harmonic nearly as strong as the fundamental: fundamental wins.",
+             40, 52, 52, harmonic=0.5, amp=2.0),
     ]
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
@@ -202,8 +226,9 @@ def generate_all() -> dict[str, str]:
 # ------------------------------------------------------------------ comparison (shared semantics)
 
 _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": "event_time_s",
-             "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion"}
-_TOL_DEFAULTS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
+             "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
+             "bpm": "bpm", "bpm_ibi": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi"}
+_TOL_DEFAULTS = {"bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
                  "torso_angle_deg": 0.05, "motion": 0.01}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 

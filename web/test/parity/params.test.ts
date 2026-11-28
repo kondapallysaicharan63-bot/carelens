@@ -30,7 +30,8 @@ describe('shared/params.json', () => {
   });
 
   it('marks upcoming sections reserved with the planned values', () => {
-    for (const k of ['contact_ppg', 'rppg', 'breathing_signal', 'tremor', 'audio']) {
+    expect(params.contact_ppg.reserved).toBeUndefined(); // W1: live
+    for (const k of ['rppg', 'breathing_signal', 'tremor', 'audio']) {
       expect(params[k].reserved).toBe(true);
     }
     expect([params.contact_ppg.band_lo_hz, params.contact_ppg.band_hi_hz]).toEqual([0.7, 3]);

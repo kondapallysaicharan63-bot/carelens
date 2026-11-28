@@ -6,17 +6,25 @@ import { createPoseSmoke } from '../capture/pose';
 import { openStreamWithFallback, stopStream } from '../capture/session';
 import { safeGet, safeRemove, safeSet } from '../storage';
 import { makeCard, TIER1, TIER2, type Card } from './cards';
+import { buildFingertipView, FingertipSession } from './fingertip';
+import { qualityMeter } from './quality';
 import { Consent, DISCLAIMER } from './consent';
 import { el } from './dom';
 import { NOT_OFFERED } from './notOffered';
 
 type Theme = 'auto' | 'light' | 'dark';
+type Mode = 'standard' | 'fingertip';
 
 export function mountApp(root: HTMLElement): void {
   const consent = new Consent();
   let stream: MediaStream | null = null;
   let choice: CaptureChoice = {};
   let presenceSession: PresenceSession | null = null;
+  let fingertipSession: FingertipSession | null = null;
+  let mode: Mode = 'standard';
+  // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
+  let stdCamera = consent.state.camera;
+  let stdMic = consent.state.mic;
   let gen = 0; // capture generation: bumped on every Stop/Start so stale async work can bail out
 
   const savedCam = safeGet('videoDeviceId');
@@ -61,19 +69,43 @@ export function mountApp(root: HTMLElement): void {
     consent.stop();
     const cam = el('input', { type: 'checkbox', id: 'consent-camera' });
     const mic = el('input', { type: 'checkbox', id: 'consent-mic' });
-    cam.checked = consent.state.camera;
-    mic.checked = consent.state.mic;
+    cam.checked = stdCamera;
+    mic.checked = stdMic;
     const start = el('button', { type: 'button', class: 'btn primary', id: 'start' }, 'Start');
+    const micRow = el('label', { class: 'toggle' }, mic, el('span', {}, 'Use microphone'));
+    const modeStd = el('input', { type: 'radio', name: 'mode', id: 'mode-standard', value: 'standard' });
+    const modeFp = el('input', { type: 'radio', name: 'mode', id: 'mode-fingertip', value: 'fingertip' });
+    modeStd.checked = mode === 'standard';
+    modeFp.checked = mode === 'fingertip';
     const sync = () => {
+      mode = modeFp.checked ? 'fingertip' : 'standard';
+      if (mode === 'fingertip') {
+        mic.checked = false; // fingertip mode needs the camera only (the standard choices are kept)
+        cam.checked = true;
+      } else {
+        cam.checked = stdCamera;
+        mic.checked = stdMic;
+      }
+      micRow.hidden = mode === 'fingertip';
+      cam.disabled = mode === 'fingertip';
+      start.textContent = mode === 'fingertip' ? 'Start fingertip heart rate' : 'Start';
       consent.setCamera(cam.checked);
       consent.setMic(mic.checked);
       start.disabled = !consent.canStart();
     };
-    cam.addEventListener('change', sync);
-    mic.addEventListener('change', sync);
+    modeStd.addEventListener('change', sync);
+    modeFp.addEventListener('change', sync);
+    cam.addEventListener('change', () => {
+      if (mode === 'standard') stdCamera = cam.checked;
+      sync();
+    });
+    mic.addEventListener('change', () => {
+      if (mode === 'standard') stdMic = mic.checked;
+      sync();
+    });
     start.addEventListener('click', () => {
       sync();
-      if (consent.start()) void beginCapture();
+      if (consent.start()) void (mode === 'fingertip' ? beginFingertip() : beginCapture());
     });
     sync();
     const errBox = el('p', { class: 'error', role: 'alert' }, error ?? '');
@@ -85,8 +117,15 @@ export function mountApp(root: HTMLElement): void {
         el('h2', {}, 'Before you start'),
         el('p', { class: 'disclaimer', id: 'disclaimer' }, DISCLAIMER),
         el('p', {}, 'Everything is processed on this device. Video and sound are never uploaded or saved. Choose what to allow; you can change this each time.'),
+        el(
+          'fieldset',
+          { class: 'modes' },
+          el('legend', {}, 'What to measure'),
+          el('label', { class: 'toggle' }, modeStd, el('span', {}, 'Camera and microphone checks')),
+          el('label', { class: 'toggle' }, modeFp, el('span', {}, 'Heart rate (fingertip): back camera and flash')),
+        ),
         el('label', { class: 'toggle' }, cam, el('span', {}, 'Use camera')),
-        el('label', { class: 'toggle' }, mic, el('span', {}, 'Use microphone')),
+        micRow,
         errBox,
         start,
       ),
@@ -115,6 +154,8 @@ export function mountApp(root: HTMLElement): void {
     gen++;
     presenceSession?.end();
     presenceSession = null;
+    fingertipSession?.end();
+    fingertipSession = null;
     stopStream(stream);
     stream = null;
   }
@@ -252,6 +293,55 @@ export function mountApp(root: HTMLElement): void {
     } catch (err) {
       if (!session.isEnded) presence.setValue('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
     }
+  }
+
+  /** Fingertip heart-rate mode: back camera, torch on when supported, ROI frame loop -> core. */
+  async function beginFingertip(): Promise<void> {
+    const g = ++gen;
+    const view = buildFingertipView(qualityMeter);
+    const stopBtn = el('button', { type: 'button', class: 'btn', id: 'fp-stop' }, 'Stop');
+    stopBtn.addEventListener('click', () => showConsent());
+    view.root.append(el('div', { class: 'btnrow' }, stopBtn));
+    main.replaceChildren(view.root, notOffered);
+    let opened: MediaStream;
+    try {
+      // Prefer the back camera (a stale remembered deviceId from the standard mode is ignored here).
+      const r = await openStreamWithFallback(consent, navigator.mediaDevices, { facing: 'environment' });
+      opened = r.stream;
+    } catch (err) {
+      if (g === gen) showConsent(describeMediaError(err));
+      return;
+    }
+    if (g !== gen) {
+      stopStream(opened);
+      return;
+    }
+    stream = opened;
+    const vtrack = stream.getVideoTracks()[0];
+    if (!vtrack) {
+      showConsent('No camera track was available.');
+      return;
+    }
+    let torch = false;
+    if (supportsTorch(vtrack)) {
+      try {
+        torch = await setTorch(vtrack, true);
+      } catch {
+        torch = false;
+      }
+    }
+    view.setNoTorchNote(!torch);
+    view.status.textContent = `${vtrack.label || 'Camera'}${torch ? ', flash on' : ', no flash'}`;
+    view.video.srcObject = new MediaStream([vtrack]);
+    try {
+      await view.video.play();
+    } catch {
+      /* needs a gesture on some browsers; Start was one */
+    }
+    if (g !== gen) return;
+    const session = new FingertipSession(onVideoFrame, view.hooks);
+    fingertipSession = session;
+    session.start(view.video);
   }
 
   function fill(sel: HTMLSelectElement, devices: MediaDeviceInfo[], currentId: string | undefined, fallback: string): void {

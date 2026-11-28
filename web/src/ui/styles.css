@@ -69,3 +69,11 @@ select { font: inherit; min-height: 44px; max-width: 100%; padding: 4px 8px; bor
 .no-list dd { margin: 2px 0 0; color: var(--muted); }
 .foot { padding-bottom: 32px; color: var(--muted); font-size: 0.85rem; }
 [hidden] { display: none !important; }
+fieldset.modes { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 8px; padding: 4px 12px 8px; }
+fieldset.modes legend { color: var(--muted); font-size: 0.9rem; padding: 0 4px; }
+.preview.small { max-width: 160px; }
+.preview.small video { max-height: 120px; }
+.wave { display: block; width: 100%; max-width: 640px; height: 60px; color: var(--accent); background: var(--bg); border-radius: 8px; margin: 8px 0; }
+.instructions { font-weight: 600; margin: 0 0 8px; }
+.guidance { font-weight: 600; margin: 8px 0; }
+progress { width: 100%; max-width: 640px; height: 12px; accent-color: var(--accent); }

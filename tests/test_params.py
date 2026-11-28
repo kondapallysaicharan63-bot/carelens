@@ -30,7 +30,7 @@ def test_missing_key_rejected():
 
 
 def test_reserved_sections_and_values():
-    assert PARAMS.contact_ppg.reserved and (PARAMS.contact_ppg.band_lo_hz, PARAMS.contact_ppg.band_hi_hz) == (0.7, 3.0)
+    assert (PARAMS.contact_ppg.band_lo_hz, PARAMS.contact_ppg.band_hi_hz) == (0.7, 3.0)  # W1: live, not reserved
     assert PARAMS.rppg.methods == ["POS", "CHROM"]
     assert (PARAMS.breathing_signal.band_lo_hz, PARAMS.breathing_signal.band_hi_hz) == (0.1, 0.7)
     assert (PARAMS.tremor.band_lo_hz, PARAMS.tremor.band_hi_hz) == (3.0, 12.0)
