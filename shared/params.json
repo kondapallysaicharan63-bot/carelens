@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -40,7 +40,7 @@
       "window_s": 30.0,
       "step_s": 2.0,
       "band_lo_hz": 0.1,
-      "band_hi_hz": 0.5
+      "band_hi_hz": 0.7
     },
     "pipeline_min_roi_px": 60,
     "roi": {
@@ -100,6 +100,19 @@
   "pipeline": {
     "clip_pre_s": 5.0,
     "clip_buffer_s": 45.0
+  },
+  "scheduling": {
+    "pose_hz": 8.0,
+    "pose_budget_ms": 90.0,
+    "gap_min_s": 1.0,
+    "inactivity_demo_default_s": 120.0,
+    "inactivity_demo_options_s": [60.0, 120.0, 300.0, 600.0]
+  },
+  "chest_shift": {
+    "frame_w_px": 320,
+    "patch_max_w_px": 96,
+    "max_shift_px": 4,
+    "min_corr": 0.2
   },
   "contact_ppg": {
     "window_s": 10.0,

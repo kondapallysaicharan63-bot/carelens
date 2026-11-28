@@ -10,8 +10,11 @@ export function onVideoFrame(video: HTMLVideoElement, cb: (nowMs: number, meta?:
   const hasRvfc = 'requestVideoFrameCallback' in video;
   const tick = (now: number, meta?: FrameMeta) => {
     if (stopped) return;
-    cb(now, meta);
-    schedule();
+    try {
+      cb(now, meta);
+    } finally {
+      schedule(); // a throwing handler must never end the loop
+    }
   };
   const schedule = () => {
     if (hasRvfc) video.requestVideoFrameCallback((now, meta) => tick(now, meta));

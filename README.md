@@ -125,7 +125,7 @@ Full engineering spec set in `docs/`, and `CLAUDE.md` is the working guide for C
 | Activity timeline | Seconds sitting / standing / walking / lying, bucketed per hour |
 | Gait metrics | Approximate walking speed and steadiness per room crossing, as a trend over days |
 | Heart rate (rPPG) | Green channel of a face skin patch, band-passed 0.7–3 Hz, only when still & well lit, with a quality score |
-| Breathing rate | Chest-region vertical motion, band-passed 0.1–0.5 Hz, when still, with a quality score |
+| Breathing rate | Chest-region vertical motion, band-passed 0.1–0.7 Hz (6–42 breaths/min), when still, with a quality score |
 | Dashboard | Local web page (localhost only) with timeline, events, trends, and a "Simulated or test data" banner |
 
 ## Install

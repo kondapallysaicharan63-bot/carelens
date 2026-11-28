@@ -90,7 +90,7 @@ standards-based cameras, clip-based for the cloud ones.
 
 ### 4.4 Vitals (contactless)
 - **P0** Heart rate (rPPG, green channel, 0.7–3 Hz) with quality score, stillness + light gating. *(built)*
-- **P0** Breathing rate (chest motion, 0.1–0.5 Hz) with quality score. *(built)*
+- **P0** Breathing rate (chest motion, 0.1–0.7 Hz = 6–42 breaths/min) with quality score. *(built)*
 - **P1** Signal-quality dashboard + automatic suppression of low-confidence windows (built: reported flag; surface it).
 
 ### 4.5 Alerting

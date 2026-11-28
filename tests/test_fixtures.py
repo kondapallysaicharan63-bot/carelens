@@ -120,3 +120,42 @@ def test_fixtures_use_real_vitals_code_paths():
     m = (ts <= last["t"] + 1e-9) & (ts >= last["t"] - hr.window_s - 1e-9)
     r = vitals.estimate_window(ts[m], np.array(inp["green"])[m], hr.lo, hr.hi, hr.min_quality)
     assert (r["value"], r["quality"], r["reported"]) == (last["value"], last["quality"], last["reported"])
+
+
+# ---- W3 pose-chain fixtures: the committed expectations must keep exercising what their names promise
+
+def _fx(name):
+    return json.loads((fx.FIXTURE_DIR / f"{name}.json").read_text())
+
+
+def test_pose_chain_fixture_semantics():
+    d = _fx("track_dropout_fill")["expected"]
+    assert [r["state"] for r in d["presence_runs"]] == ["absent", "present", "held", "present", "held", "absent", "present"]
+    assert not d["events"]
+    h = _fx("track_enter_hysteresis")["expected"]
+    assert [r["state"] for r in h["presence_runs"]] == ["absent", "present"]   # the lone detection is ignored
+    assert h["presence_runs"][1]["t"] >= 2.0
+    f = _fx("track_fast_fall_5fps")
+    assert f["input"]["fps"] == 5.0 and [e["kind"] for e in f["expected"]["events"]] == ["fall"]
+    p = _fx("posture_sequence")["expected"]
+    assert [r["posture"] for r in p["posture_runs"]] == ["absent", "standing", "sitting", "lying"]
+    assert not p["events"]
+
+
+def test_fall_across_camera_gap_counts_only_observed_stillness():
+    g = _fx("fall_camera_gap")
+    (gap_i, gap_s), = g["input"]["gaps"]
+    ev, = g["expected"]["events"]
+    assert ev["kind"] == "fall"
+    t_gap = g["input"]["t"][gap_i]
+    # confirmed well after the gap, and ~still_seconds of OBSERVED time after onset (the gap itself is excluded)
+    assert ev["t_confirmed"] > t_gap
+    assert ev["t_confirmed"] - ev["t_onset"] - gap_s >= PARAMS.events.fall.still_seconds - 1e-6
+    assert ev["t_confirmed"] - ev["t_onset"] - gap_s < PARAMS.events.fall.still_seconds + 4
+
+
+def test_breathing_band_is_shared_and_wide():
+    assert (PARAMS.vitals.breathing.band_lo_hz, PARAMS.vitals.breathing.band_hi_hz) == (0.1, 0.7)
+    assert (PARAMS.breathing_signal.band_lo_hz, PARAMS.breathing_signal.band_hi_hz) == (0.1, 0.7)
+    assert PARAMS.scheduling.pose_hz == 8.0
+    assert PARAMS.scheduling.inactivity_demo_default_s in PARAMS.scheduling.inactivity_demo_options_s

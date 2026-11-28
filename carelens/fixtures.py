@@ -20,8 +20,11 @@ from typing import Callable
 import numpy as np
 
 from . import pose as P
+from dataclasses import replace
+
 from .events import FallDetector, InactivityDetector
 from .features import FeatureExtractor
+from .tracking import PresenceTracker
 from .params import PARAMS
 from .ppg import run_contact_ppg, synth_trace
 from .rppg import run_face_rppg, synth_face_trace
@@ -108,10 +111,53 @@ def run_landmarks(inp: dict) -> dict:
     return _round({"events": events, "features_1hz": features})
 
 
+def run_pose_chain(inp: dict) -> dict:
+    """The whole browser pose chain: landmarks -> PresenceTracker -> FeatureExtractor -> FallDetector +
+    InactivityDetector, wired exactly as in ``pipeline.run`` (camera gaps, held frames). Frame times are
+    ``t[]`` (default ``i/fps``); ``gaps = [[frame_index, gap_s], ...]`` marks outages before a frame."""
+    fps, cfg, aspect = inp["fps"], inp.get("config", {}), inp["aspect"]
+    indices = inp["landmark_indices"]
+    gaps = {int(i): g for i, g in inp.get("gaps", [])}
+    feats = FeatureExtractor(aspect=aspect)
+    tracker = PresenceTracker()
+    fall = FallDetector()
+    inact = InactivityDetector(seconds=cfg.get("inactivity_seconds", PARAMS.events.inactivity.seconds))
+    events, features, postures, presence = [], [], [], []
+    last_sec, s = None, None
+    for i, frame in enumerate(inp["landmarks"]):
+        t = inp["t"][i] if "t" in inp else i / fps
+        gap = gaps.get(i, 0.0)
+        if gap > 0:
+            tracker.skip_gap(gap)
+            feats.reset()
+            fall.pause(gap)
+            inact.pause(gap)
+        lm = _landmarks(frame, indices) if frame is not None else None
+        lm, held = tracker.update(t, lm, aspect)
+        s = replace(s, t=t) if (held and s is not None) else feats.update(t, lm)
+        state = "held" if held else ("present" if s.present else "absent")
+        if not presence or presence[-1]["state"] != state:
+            presence.append({"t": round(t, 3), "state": state})
+        if not postures or postures[-1]["posture"] != s.posture:
+            postures.append({"t": round(t, 3), "posture": s.posture})
+        if last_sec != math.floor(t):
+            last_sec = math.floor(t)
+            features.append({"t": round(t, 3), "present": s.present, "posture": s.posture,
+                             "torso_angle_deg": s.torso_angle, "motion": s.motion})
+        for det in (fall, inact):
+            ev = det.update(s, held=True) if (held and det is fall) else det.update(s)
+            if ev:
+                events.append({"kind": ev.kind, "t_onset": ev.t_onset, "t_confirmed": ev.t_confirmed,
+                               "trigger": ev.details.get("trigger")})
+    return _round({"events": events, "features_1hz": features, "posture_runs": postures,
+                   "presence_runs": presence})
+
+
 RUNNERS: dict[str, Callable[[dict], dict]] = {
     "roi_trace_hr": run_hr_trace,
     "chest_trace_breathing": run_breathing_trace,
     "landmarks": run_landmarks,
+    "pose_chain": run_pose_chain,
     "ppg_contact": run_contact_ppg,
     "face_rppg": run_face_rppg,
 }
@@ -176,6 +222,31 @@ def _lm(name, desc, segs, seed, config=None, fps=15.0):
     return _fixture(name, desc, "landmarks", inp, TOL_EVENTS)
 
 
+def _chain(name, desc, segs, seed, fps=15.0, dropouts=(), gaps=(), config=None):
+    """pose_chain fixture: scenario landmarks with ``dropouts`` [(t0, t1)) set to no-person and camera ``gaps``
+    [(t_observed, gap_s)] (timestamps after a gap jump by gap_s; the pipeline is told via ``gaps``)."""
+    scn = Scenario(segs, jitter=0.0008, seed=seed)
+    frames, times, gap_list, jump = [], [], [], 0.0
+    pending = sorted(gaps)
+    for i in range(int(scn.duration * fps)):
+        t_obs = i / fps
+        while pending and t_obs >= pending[0][0] - 1e-9:
+            g = pending.pop(0)[1]
+            jump += g
+            gap_list.append([i, g])
+        lm = scn.pose_landmarks(t_obs)
+        if any(a <= t_obs < b for a, b in dropouts):
+            lm = None
+        frames.append(None if lm is None else lm[LM_INDICES].tolist())
+        times.append(t_obs + jump)
+    inp = {"fps": fps, "aspect": ASPECT, "landmark_indices": LM_INDICES, "landmarks": frames, "t": times}
+    if gap_list:
+        inp["gaps"] = gap_list
+    if config:
+        inp["config"] = config
+    return _fixture(name, desc, "pose_chain", inp, TOL_EVENTS)
+
+
 def _ppg(name, desc, dur=40.0, bpm=72.0, seed=0, **kw):
     tr = synth_trace(dur, bpm, seed=seed, **kw)
     inp = {k: [round(v, 4) for v in tr[k]] for k in ("t", "r", "g", "b", "clip_frac")}
@@ -221,6 +292,34 @@ def generate_all() -> dict[str, str]:
         _lm("inactivity_sit_still", "Walk then sit still 40 s with inactivity_seconds=30: one inactivity event.",
             [Segment("walk", 2, x0=0.2, x1=0.5), Segment("still", 40, posture="sit", x0=0.5)], 33,
             config={"inactivity_seconds": 30.0}),
+        _chain("track_dropout_fill",
+               "Standing 8 s; a 0.4 s dropout is bridged (held), a 1.0 s dropout drops presence (hold_s = 0.5 s) and "
+               "re-entry needs the enter span.",
+               [Segment("still", 8, posture="stand", x0=0.5)], 41, dropouts=[(3.0, 3.4), (5.0, 6.0)]),
+        _chain("track_enter_hysteresis",
+               "A lone detection after 1 s of nothing never creates presence; sustained detection from 2 s does, after "
+               "the enter span.",
+               [Segment("still", 6, posture="stand", x0=0.5)], 42, dropouts=[(0.0, 1.0), (1.0 + 1e-3, 2.0)]),
+        _chain("track_fast_fall_5fps",
+               "5 fps (the validated floor is 3): walk, stand, 0.6 s drop to lying, stay down. The big frame-to-frame jump "
+               "passes through the tracker raw: one fall event.",
+               [Segment("walk", 3, x0=0.15, x1=0.4), Segment("still", 2, posture="stand", x0=0.4),
+                Segment("transition", 0.6, posture="stand", to="lie", x0=0.4),
+                Segment("still", 25, posture="lie", x0=0.4)], 43, fps=5.0),
+        _chain("posture_sequence",
+               "Stand 4 s, sit down (1.5 s), sit 4 s, slow lie-down (6 s), lie 4 s: posture labels standing -> sitting -> "
+               "lying, no fall.",
+               [Segment("still", 4, posture="stand", x0=0.5),
+                Segment("transition", 1.5, posture="stand", to="sit", x0=0.5),
+                Segment("still", 4, posture="sit", x0=0.5),
+                Segment("transition", 6, posture="sit", to="lie", x0=0.5),
+                Segment("still", 4, posture="lie", x0=0.5)], 44),
+        _chain("fall_camera_gap",
+               "Sudden fall at 2 s, lie still; the camera is unobserved for 40 s from 6 s. The pending fall survives the gap "
+               "and the gap does not count as stillness: confirmed ~20 s of OBSERVED stillness after onset.",
+               [Segment("still", 2, posture="stand", x0=0.4),
+                Segment("transition", 0.6, posture="stand", to="lie", x0=0.4),
+                Segment("still", 30, posture="lie", x0=0.4)], 45, gaps=[(6.0, 40.0)]),
         _ppg("ppg_clean_60bpm", "Fingertip PPG (mean R/G/B per frame, 30 fps), 60 bpm, clean.", 40, 60, 101),
         _ppg("ppg_clean_90bpm", "Fingertip PPG, 90 bpm, clean.", 40, 90, 102),
         _ppg("ppg_clean_150bpm", "Fingertip PPG, 150 bpm, clean.", 40, 150, 103),

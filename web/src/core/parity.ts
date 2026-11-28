@@ -5,6 +5,8 @@
 
 import { runContactPpg } from './ppg';
 import { runFaceRppg } from './rppg';
+import { runPoseFixture } from './pipeline';
+import { BreathingRateEstimator } from './breathing';
 
 export interface Fixture {
   name: string;
@@ -22,7 +24,30 @@ const ppgContact: Implementation = (fx, params) => runContactPpg(fx.input, param
 
 const faceRppg: Implementation = (fx, params) => runFaceRppg(fx.input, params.rppg);
 
+const landmarks: Implementation = (fx, params) => runPoseFixture(fx.input, params, false);
+
+const poseChain: Implementation = (fx, params) => runPoseFixture(fx.input, params, true);
+
+/** chest_trace_breathing: cumulative chest displacement per frame -> BreathingRateEstimator. */
+const chestBreathing: Implementation = (fx, params) => {
+  const est = new BreathingRateEstimator(params.vitals, params.common.min_quality);
+  const fps: number = fx.input.fps;
+  (fx.input.chest_y_px as number[]).forEach((y, i) => est.updateDisplacement(i / fps, y));
+  return { estimates: est.estimates };
+};
+
 export const IMPLEMENTATIONS: Record<string, Implementation> = {
+  breathing_10bpm: chestBreathing,
+  breathing_15bpm: chestBreathing,
+  breathing_20bpm: chestBreathing,
+  fall_sudden: landmarks,
+  fall_slow_lie_down: landmarks,
+  inactivity_sit_still: landmarks,
+  track_dropout_fill: poseChain,
+  track_enter_hysteresis: poseChain,
+  track_fast_fall_5fps: poseChain,
+  posture_sequence: poseChain,
+  fall_camera_gap: poseChain,
   ppg_clean_60bpm: ppgContact,
   ppg_clean_90bpm: ppgContact,
   ppg_clean_150bpm: ppgContact,

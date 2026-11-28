@@ -16,6 +16,7 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 | `chest_trace_breathing` | `fps`, `chest_y_px[]` (cumulative chest vertical displacement per frame), `truth_breaths_per_min` | Push each sample; emit estimates as `BreathingRateEstimator`. |
 | `ppg_contact` | `t[]` (s), `r[]`, `g[]`, `b[]` (mean of the central ROI per frame, 0-255), `clip_frac[]` (fraction of ROI pixels with R >= 250), `truth_bpm` (inputs rounded to 4 dp) | Feed frames one by one to `ContactPPG.update(t, r, g, b, clip_frac)`; collect each non-null output (one per `contact_ppg.step_s`). Design and gates: `carelens/ppg.py` docstring. |
 | `face_rppg` | `t[]`, `roi_rgb[]` (mean [R,G,B] over the skin ROI, `null` = no face), `roi_px[]`, `face_motion[]` (eye spans/s), `brightness[]`, optional `skin_frac[]` (share of ROI pixels kept by the skin filter, default 1), `truth_bpm`, `skin` | Feed frames to `FaceRPPG.update(t, roi_rgb, roi_px, face_motion, brightness)`; collect each non-null output. Design and gates: `carelens/rppg.py` docstring. |
+| `pose_chain` | as `landmarks` plus `t[]` (frame times; default `i/fps`) and `gaps` (`[[frame_index, gap_s], ...]`: camera unobserved before that frame, timestamps already include the jump) | The whole browser chain, wired as `pipeline.run`: `PresenceTracker` -> `FeatureExtractor` -> `FallDetector` (held frames, `pause`) + `InactivityDetector` (`pause`); gap = `tracker.skip_gap`, `feats.reset`, detectors `pause`. |
 | `landmarks` | `fps`, `aspect`, `landmark_indices` (MediaPipe indices), `landmarks[frame][k] = [x, y, visibility]` (x normalised by width, y by height; unlisted landmarks are visibility 0.2; `null` = no person), optional `config` overrides | `FeatureExtractor` -> `FallDetector` + `InactivityDetector`, no tracker. |
 
 ## Expected outputs
@@ -35,12 +36,17 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
   kind, times within `event_time_s`) and `expected.features_1hz[]` (one entry per second:
   posture, torso angle, motion).
 
+- `pose_chain` fixtures: `expected` = `events[]` and `features_1hz[]` as above, plus `posture_runs[] = {t, posture}` and `presence_runs[] = {t, state}` (`absent|present|held`), run-length encoded (labels exact, times within `t_s`).
+- `chest_trace_breathing` runs through `vitals.estimate_window`: Butterworth band-pass (params `vitals.breathing`, band 0.1-0.7 Hz since params v6) + Welch. Parity is at the displacement level; the browser image -> displacement step (`web/src/core/chestShift.ts`) is platform specific and unit-tested separately.
+
 ## Fixtures
 
 `hr_green_{60,72,90,110}bpm` (noise), `hr_green_motion_burst` (motion 20-28 s),
 `hr_green_low_light` (brightness gate trips at 30 s), `breathing_{10,15,20}bpm`,
 `fall_sudden` (one fall), `fall_slow_lie_down` (no event), `inactivity_sit_still`
 (`config.inactivity_seconds = 30`).
+
+W3 `pose_chain`: `track_dropout_fill`, `track_enter_hysteresis`, `track_fast_fall_5fps`, `posture_sequence` (stand -> sit -> lie), `fall_camera_gap` (40 s outage; the pending fall survives and the gap is not stillness).
 
 `ppg_clean_{60,90,150}bpm`, `ppg_jitter_drops` (+-8 ms jitter, 5 % dropped frames, 0.3 s hiccup),
 `ppg_motion_burst` (25-31 s: `no_finger`/`settling`, then `ok`), `ppg_saturation` (20-32 s: `saturated`),

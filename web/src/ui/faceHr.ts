@@ -7,6 +7,8 @@ import { FaceRPPG, assertRppgParams, type RppgParams, type RppgReason, type Rppg
 import { FrameClock } from '../capture/ppgSampler';
 import type { FrameMeta } from '../capture/frames';
 import { FaceRoiSampler, contentRect, eyeSpan, faceMotion, polysCentroid, roiPolygons, type Pt, type RoiPolys } from '../capture/faceRoi';
+import { PoseScheduler } from '../core/scheduler';
+import { seedAndSubscribe } from './controls';
 import { el } from './dom';
 
 export const RPPG_PARAMS = assertRppgParams(params.rppg as RppgParams);
@@ -43,6 +45,16 @@ export function guidance(reason: RppgReason | 'idle' | 'loading'): string {
   }
 }
 
+export type FaceLoadState = 'loading' | 'ready' | 'failed';
+
+/** The guidance line is derived from (load state, active, last reason), never overwritten piecemeal. */
+export function faceGuidanceText(load: FaceLoadState, active: boolean, reason: RppgReason | null, failMsg = ''): string {
+  if (load === 'failed') return 'Face model failed to load' + (failMsg ? ': ' + failMsg : '');
+  if (!active) return 'Face heart rate is off';
+  if (load === 'loading') return guidance('loading');
+  return guidance(reason ?? 'idle');
+}
+
 export interface FaceHandle {
   detect(video: HTMLVideoElement, ts: number): Pt[] | null;
   close(): void;
@@ -52,6 +64,8 @@ export interface FaceHooks {
   onUpdate(u: RppgUpdate): void;
   /** every frame: the ROI polygons in normalised image coordinates, or null when no face */
   onOutline(polys: RoiPolys | null, videoW: number, videoH: number): void;
+  /** frame processing threw (true) / recovered (false) */
+  onError?(failing: boolean): void;
 }
 
 type Subscribe = (video: HTMLVideoElement, cb: (nowMs: number, meta?: FrameMeta) => void) => () => void;
@@ -67,6 +81,7 @@ export class FaceHrSession {
   private video: HTMLVideoElement | null = null;
   private prev: Pt | null = null;
   private prevT = 0;
+  private active = true;
 
   constructor(private readonly subscribe: Subscribe, private readonly hooks: FaceHooks) {}
 
@@ -80,6 +95,16 @@ export class FaceHrSession {
     if (this.ended) { h.close(); return; }
     this.handle = h;
     this.restart();
+  }
+
+  /** The face landmarker only runs while the face-HR card is active (PoseScheduler.shouldRunFace); pausing drops the window. */
+  setActive(active: boolean): void {
+    if (this.active === active) return;
+    this.active = active;
+    if (!active) {
+      this.core.reset(); this.clock.reset(); this.prev = null;
+      this.hooks.onOutline(null, 0, 0);
+    }
   }
 
   restart(): void {
@@ -99,8 +124,21 @@ export class FaceHrSession {
     this.handle = null;
   }
 
+  private errors = 0;
+
   private onFrame(video: HTMLVideoElement, now: number, meta?: FrameMeta): void {
-    if (this.ended || !this.handle || video.videoWidth === 0 || video.readyState < 2) return;
+    try {
+      this.processFrame(video, now, meta);
+      if (this.errors > 0) { this.errors = 0; this.hooks.onError?.(false); }
+    } catch {
+      this.errors++;
+      this.core.reset(); this.clock.reset(); this.prev = null; // the frames lost are not data
+      this.hooks.onError?.(true);
+    }
+  }
+
+  private processFrame(video: HTMLVideoElement, now: number, meta?: FrameMeta): void {
+    if (this.ended || !this.handle || !PoseScheduler.shouldRunFace(this.active) || video.videoWidth === 0 || video.readyState < 2) return;
     const t = this.clock.time(now, meta);
     if (t === null) return;
     const lm = this.handle.detect(video, now);
@@ -150,10 +188,14 @@ export function drawOutline(canvas: HTMLCanvasElement, polys: RoiPolys | null, v
 
 export interface FaceCard {
   root: HTMLElement;
+  /** register the handler for the "Measure face heart rate" switch (default on); it is seeded with the current state */
+  onActiveChange(cb: (active: boolean) => void): void;
   /** overlay canvas: append it inside the (position: relative) video preview */
   overlay: HTMLCanvasElement;
   hooks: FaceHooks;
-  setStatus(text: string): void;
+  setLoadState(state: FaceLoadState, failMsg?: string): void;
+  /** a processing error is being retried */
+  setError(failing: boolean): void;
 }
 
 export function buildFaceCard(meter: (q: number | null) => HTMLElement): FaceCard {
@@ -161,6 +203,8 @@ export function buildFaceCard(meter: (q: number | null) => HTMLElement): FaceCar
   const meterSlot = el('div', { class: 'meter-slot' }, meter(null));
   const guide = el('p', { class: 'guidance', id: 'face-guidance', role: 'status' }, guidance('loading'));
   const toggle = el('input', { type: 'checkbox', id: 'face-outline-toggle' });
+  const activeToggle = el('input', { type: 'checkbox', id: 'face-active-toggle' });
+  activeToggle.checked = true;
   const overlay = document.createElement('canvas');
   overlay.className = 'roi-overlay';
   overlay.setAttribute('aria-hidden', 'true');
@@ -173,13 +217,21 @@ export function buildFaceCard(meter: (q: number | null) => HTMLElement): FaceCar
     bpm,
     meterSlot,
     guide,
+    el('label', { class: 'toggle' }, activeToggle, el('span', {}, 'Measure face heart rate (uses more battery)')),
     el('label', { class: 'toggle' }, toggle, el('span', {}, 'Show the measured face areas')),
     el('p', { class: 'note', id: 'face-limits' }, LIMITS_NOTE),
     el('p', { class: 'note' }, FINGERTIP_HINT),
   );
   let lastReason: RppgReason | null = null;
+  let load: FaceLoadState = 'loading';
+  let failMsg = '';
+  let failing = false;
+  const renderGuide = () => {
+    guide.textContent = failing ? 'Camera processing error — restarting detector' : faceGuidanceText(load, activeToggle.checked, lastReason, failMsg);
+  };
   const hooks: FaceHooks = {
     onOutline: (polys, vw, vh) => drawOutline(overlay, polys, vw, vh),
+    onError: (f) => { failing = f; renderGuide(); },
     onUpdate(u) {
       lastReason = u.reason;
       if (u.reported && u.bpm !== null) {
@@ -190,9 +242,21 @@ export function buildFaceCard(meter: (q: number | null) => HTMLElement): FaceCar
         bpm.classList.add('muted');
       }
       meterSlot.replaceChildren(meter(u.snr !== null ? u.quality : null));
-      guide.textContent = guidance(u.reason);
-      root.dataset.reason = lastReason;
+      root.dataset.reason = u.reason;
+      renderGuide();
     },
   };
-  return { root, overlay, hooks, setStatus: (text) => { guide.textContent = text; } };
+  const activeSubs: (() => void)[] = [];
+  activeToggle.addEventListener('change', () => {
+    if (!activeToggle.checked) { bpm.textContent = 'No reading yet'; bpm.classList.add('muted'); meterSlot.replaceChildren(meter(null)); }
+    else lastReason = null;
+    renderGuide();
+    for (const h of activeSubs) h();
+  });
+  return {
+    root, overlay, hooks,
+    setLoadState: (s, m = '') => { load = s; failMsg = m; renderGuide(); },
+    setError: (f) => { failing = f; renderGuide(); },
+    onActiveChange: (cb) => seedAndSubscribe(() => activeToggle.checked, (h) => activeSubs.push(h), cb),
+  };
 }

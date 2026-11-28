@@ -132,6 +132,24 @@ class PipelineParams(_M):
     clip_buffer_s: float
 
 
+class Scheduling(_M):
+    """Browser frame scheduling (web/src/core/scheduler.ts). Not used by the Python pipeline, whose
+    sources report camera gaps themselves; kept here so both sides validate the same file."""
+    pose_hz: float
+    pose_budget_ms: float
+    gap_min_s: float
+    inactivity_demo_default_s: float
+    inactivity_demo_options_s: List[float]
+
+
+class ChestShift(_M):
+    """Browser chest image->displacement step (web/src/core/chestShift.ts); Python uses cv2.phaseCorrelate."""
+    frame_w_px: int
+    patch_max_w_px: int
+    max_shift_px: int
+    min_corr: float
+
+
 class _Reserved(_M):
     reserved: bool
 
@@ -312,6 +330,8 @@ class Params(_M):
     events: Events
     tracking: Tracking
     pipeline: PipelineParams
+    scheduling: Scheduling
+    chest_shift: ChestShift
     contact_ppg: ContactPpg
     rppg: Rppg
     breathing_signal: BandReserved

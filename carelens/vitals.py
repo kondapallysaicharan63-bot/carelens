@@ -226,7 +226,7 @@ class HeartRateEstimator(_WindowEstimator):
 
 class BreathingRateEstimator(_WindowEstimator):
     """Vertical chest motion (phase correlation between frames), band-passed
-    0.1-0.5 Hz (6-30 breaths/min)."""
+    0.1-0.7 Hz (6-42 breaths/min)."""
 
     def __init__(self, window_s=_V.breathing.window_s, step_s=_V.breathing.step_s,
                  min_quality=_COMMON.min_quality, still_motion=_COMMON.still_motion_bodysizes_s):

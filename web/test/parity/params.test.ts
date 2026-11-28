@@ -20,7 +20,7 @@ describe('shared/params.json', () => {
 
   it('has every required section', () => {
     for (const k of [
-      'common', 'vitals', 'features', 'events', 'tracking', 'pipeline',
+      'common', 'vitals', 'features', 'events', 'tracking', 'pipeline', 'scheduling', 'chest_shift',
       'contact_ppg', 'rppg', 'breathing_signal', 'tremor', 'audio',
     ]) {
       expect(params, `missing section ${k}`).toHaveProperty(k);

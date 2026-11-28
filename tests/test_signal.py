@@ -15,13 +15,16 @@ def test_heart_band_recovers_known_rate(bpm):
     assert q > 0.2
 
 
-@pytest.mark.parametrize("brpm", [8, 12, 15, 20, 26])
+@pytest.mark.parametrize("brpm", [8, 12, 15, 20, 26, 36])
 def test_breathing_band_recovers_known_rate(brpm):
+    # band from params (0.1-0.7 Hz since params v6; it was 0.1-0.5 Hz, which could not reach 36 breaths/min)
+    from carelens.params import PARAMS
+    lo, hi = PARAMS.vitals.breathing.band_lo_hz, PARAMS.vitals.breathing.band_hi_hz
     fs, dur = 15.0, 30.0
     t = np.arange(0, dur, 1 / fs)
     rng = np.random.default_rng(1)
     x = np.sin(2 * np.pi * brpm / 60 * t) + rng.normal(0, 0.4, t.size)
-    f, q = dominant_frequency(bandpass(x, fs, 0.1, 0.5), fs, 0.1, 0.5)
+    f, q = dominant_frequency(bandpass(x, fs, lo, hi), fs, lo, hi)
     assert abs(f * 60 - brpm) < 1.5
     assert q > 0.3
 
