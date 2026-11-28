@@ -6,7 +6,8 @@
 import { runContactPpg } from './ppg';
 import { runHrv } from './hrv';
 import { runFaceRppg } from './rppg';
-import { runPoseFixture } from './pipeline';
+import { runActivityFixture, runPoseFixture } from './pipeline';
+import { runBlinkFixture } from './blink';
 import { runMobilityFixture } from './mobility';
 import { runTremorFixture } from './tremor';
 import { BreathingRateEstimator } from './breathing';
@@ -39,6 +40,10 @@ const labelEvents: Implementation = (fx, params) => runLabelEvents(fx.input, par
 const mobility: Implementation = (fx, params) => runMobilityFixture(fx.input, params);
 
 const tremor: Implementation = (fx, params) => runTremorFixture(fx.input, params);
+
+const blink: Implementation = (fx, params) => runBlinkFixture(fx.input, params);
+
+const activity: Implementation = (fx, params) => runActivityFixture(fx.input, params);
 
 const landmarks: Implementation = (fx, params) => runPoseFixture(fx.input, params, false);
 
@@ -119,6 +124,14 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   tremor_null: tremor,
   tremor_low_fps: tremor,
   tremor_moving: tremor,
+  blink_8pm: blink,
+  blink_15pm: blink,
+  blink_25pm: blink,
+  blink_long_closures: blink,
+  blink_head_turned: blink,
+  blink_low_fps: blink,
+  activity_session: activity,
+  activity_gap_dropout: activity,
 };
 
 const TOL_KEYS: Record<string, [string, number]> = {
@@ -137,6 +150,15 @@ const TREMOR_TOL_KEYS: Record<string, [string, number]> = {
   freq_hz: ['freq_hz', 0.05], amp_pct: ['amp_rel', 0.01], p2p_pct: ['amp_rel', 0.01], rms_pct: ['amp_rel', 0.01], motion_pct: ['amp_rel', 0.01],
   prominence: ['prominence', 0.01],
 };
+/** blink fixtures only */
+const BLINK_TOL_KEYS: Record<string, [string, number]> = {
+  t_start: ['blink_t_s', 0.05], t_end: ['blink_t_s', 0.05], t: ['blink_t_s', 0.05], blinks_per_min: ['blink_rate', 0.05], perclos: ['perclos', 0.005],
+  ear: ['ear', 0.005], baseline: ['ear', 0.005], coverage: ['quality', 0.01], window_s: ['window_s', 0.1], fps: ['blink_rate', 0.05],
+};
+/** activity fixtures only: every seconds figure (posture buckets, active / still / absent / longest still) */
+const ACTIVITY_TOL_KEYS: Record<string, [string, number]> = Object.fromEntries(
+  ['sitting', 'standing', 'walking', 'lying', 'absent', 'active_s', 'still_s', 'absent_s', 'total_s', 'longest_still_s', 'active_min'].map((k) => [k, ['act_time_s', 0.1] as [string, number]]),
+);
 const TOL_RELATIVE = new Set(['amp_rel']);
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 
@@ -144,7 +166,7 @@ const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
  *  strings/booleans/null (reported, kind, posture, ...), array lengths and key sets exactly. */
 export function compareOutputs(fx: Fixture, actual: any, expected: any = fx.expected): string[] {
   const errs: string[] = [];
-  const keys = fx.input_level === 'mobility' ? MOB_TOL_KEYS : fx.input_level === 'tremor' ? TREMOR_TOL_KEYS : TOL_KEYS;
+  const keys = ({ mobility: MOB_TOL_KEYS, tremor: TREMOR_TOL_KEYS, blink: BLINK_TOL_KEYS, activity: ACTIVITY_TOL_KEYS } as Record<string, Record<string, [string, number]>>)[fx.input_level] ?? TOL_KEYS;
   const tolFor = (field: string, expectedValue = 0): number => {
     const e = keys[field];
     if (!e) return TOL_OTHER;

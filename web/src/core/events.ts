@@ -129,3 +129,98 @@ export class InactivityDetector {
     return null;
   }
 }
+
+// ------------------------------------------------------------------ activity (W9, Experimental)
+
+export const POSTURES = ['sitting', 'standing', 'walking', 'lying', 'absent'] as const;
+
+const p2 = (n: number): string => String(n).padStart(2, '0');
+
+/** A wall-clock time as "naive" milliseconds: the local calendar fields read as if they were UTC (Python's naive datetime). */
+export function naiveWallMs(d: Date): number {
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds());
+}
+
+/** Seconds spent in each posture, bucketed by wall-clock hour (port of carelens.events.ActivityTimeline). `startNaiveMs` is the
+ *  session start as naive wall-clock milliseconds (see naiveWallMs). */
+export class ActivityTimeline {
+  readonly buckets = new Map<string, Record<string, number>>();
+  private lastT: number | null = null;
+
+  constructor(public startNaiveMs: number, private readonly maxStepS: number) {}
+
+  update(s: BodyState): void {
+    if (this.lastT !== null) {
+      const dt = Math.min(s.t - this.lastT, this.maxStepS);
+      const d = new Date(this.startNaiveMs + Math.trunc(s.t * 1000));
+      const hour = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:00`;
+      let b = this.buckets.get(hour);
+      if (!b) { b = {}; this.buckets.set(hour, b); }
+      b[s.posture] = (b[s.posture] ?? 0) + dt;
+    }
+    this.lastT = s.t;
+  }
+
+  /** hour -> posture -> seconds, rounded to 0.1 s like the Python reference */
+  toDict(): Record<string, Record<string, number>> {
+    const out: Record<string, Record<string, number>> = {};
+    for (const h of [...this.buckets.keys()].sort()) {
+      const v = this.buckets.get(h)!;
+      out[h] = Object.fromEntries(POSTURES.map((p) => [p, round(v[p] ?? 0, 1)]));
+    }
+    return out;
+  }
+
+  /** browser only: the frame clock started over (a new camera stream), so the next step is not measured against the old time */
+  breakStream(): void { this.lastT = null; }
+
+  /** seconds per posture over the whole session */
+  totals(): Record<string, number> {
+    const out: Record<string, number> = Object.fromEntries(POSTURES.map((p) => [p, 0]));
+    for (const v of this.buckets.values()) for (const p of POSTURES) out[p]! += v[p] ?? 0;
+    return out;
+  }
+}
+
+export interface ActivitySummaryResult {
+  reported: boolean; reason: 'ok' | 'too_short'; active_s: number; still_s: number; absent_s: number; total_s: number; longest_still_s: number; active_min: number;
+}
+
+/** Time active vs still vs away over a session (port of carelens.events.ActivitySummary). Same per-frame motion signal and
+ *  still-motion threshold as the inactivity detector; a step above the cap is an outage: it credits 0 s and ends a still stretch. A wellbeing trend, not an assessment. */
+export class ActivitySummary {
+  activeS = 0;
+  stillS = 0;
+  absentS = 0;
+  longestStillS = 0;
+  private run = 0;
+  private lastT: number | null = null;
+
+  constructor(private readonly stillMotion: number, private readonly maxStepS: number, private readonly minReportS: number) {}
+
+  update(s: BodyState): void {
+    if (this.lastT !== null) {
+      const raw = s.t - this.lastT;
+      const outage = raw > this.maxStepS;
+      if (outage) this.run = 0; // unobserved time breaks a still stretch and is credited to nothing
+      const dt = outage ? 0 : raw;
+      if (!s.present) { this.absentS += dt; this.run = 0; }
+      else if (s.motion > this.stillMotion) { this.activeS += dt; this.run = 0; }
+      else { this.stillS += dt; this.run += dt; this.longestStillS = Math.max(this.longestStillS, this.run); }
+    }
+    this.lastT = s.t;
+  }
+
+  /** browser only: see ActivityTimeline.breakStream; also ends a still stretch */
+  breakStream(): void { this.lastT = null; this.run = 0; }
+
+  get totalS(): number { return this.activeS + this.stillS + this.absentS; }
+
+  toDict(): ActivitySummaryResult {
+    const ok = this.totalS >= this.minReportS;
+    return {
+      reported: ok, reason: ok ? 'ok' : 'too_short', active_s: this.activeS, still_s: this.stillS, absent_s: this.absentS, total_s: this.totalS,
+      longest_still_s: this.longestStillS, active_min: this.activeS / 60,
+    };
+  }
+}

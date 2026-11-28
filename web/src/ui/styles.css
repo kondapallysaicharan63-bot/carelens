@@ -100,3 +100,10 @@ progress { width: 100%; max-width: 640px; height: 12px; accent-color: var(--acce
 .mv-checks .ok::before { content: "\2713  "; color: var(--accent); }
 .mv-checks .warn::before { content: "\2022  "; }
 .mv-pick .btnrow { flex-wrap: wrap; }
+
+.posture-bar { display: block; width: 100%; max-width: 640px; height: 14px; margin: 8px 0 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+.pb-sitting { fill: var(--accent); }
+.pb-standing { fill: var(--q-good); }
+.pb-walking { fill: var(--exp); }
+.pb-lying { fill: var(--q-ok); }
+.pb-absent { fill: var(--muted); opacity: 0.55; }

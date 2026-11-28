@@ -78,7 +78,7 @@ def _committed():
 def test_committed_files_present_small_and_schema():
     files = _committed()
     assert len(files) >= 12
-    assert sum(p.stat().st_size for p in files) < 4_500_000   # W7 mobility (~1 MB) and W8 hand tracks (5 x 0.15-0.19 MB of 21-point landmarks) raised this from 3.0 MB
+    assert sum(p.stat().st_size for p in files) < 7_000_000   # W9 blink (5 x 0.37 MB of 15-point landmark tracks) and activity pose tracks raised this to 7 MB; was 4.5 MB: W7 mobility (~1 MB) and W8 hand tracks (5 x 0.15-0.19 MB of 21-point landmarks) raised this from 3.0 MB
     for p in files:
         d = json.loads(p.read_text())
         assert set(d) == {"name", "description", "input_level", "params_version", "input",

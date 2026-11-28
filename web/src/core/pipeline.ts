@@ -4,13 +4,14 @@
 // Not a medical device.
 
 import { FeatureExtractor, type BodyState, type FeatureParams, type Landmarks } from './features';
-import { FallDetector, InactivityDetector, type FallParams, type PoseEvent } from './events';
+import { ActivitySummary, ActivityTimeline, FallDetector, InactivityDetector, type FallParams, type PoseEvent } from './events';
 import { PresenceTracker, type TrackingParams } from './tracking';
 
 export interface PoseChainParams {
   common: { still_motion_bodysizes_s: number };
   features: FeatureParams;
-  events: { fall: FallParams; inactivity: { seconds: number } };
+  events: { fall: FallParams; inactivity: { seconds: number }; timeline: { max_step_s: number } };
+  activity: { min_report_s: number };
   tracking: TrackingParams;
 }
 
@@ -117,4 +118,24 @@ export function runPoseFixture(input: any, params: PoseChainParams, withTracker:
   return withTracker
     ? { events, features_1hz: features, posture_runs: postures, presence_runs: presence }
     : { events, features_1hz: features };
+}
+
+/** Replays `activity` fixtures (carelens.fixtures.run_activity): the pose chain (tracker, held frames, gaps) feeding the activity
+ *  timeline and summary. `input.start` is the naive wall-clock start "YYYY-MM-DD HH:MM:SS". */
+export function runActivityFixture(input: any, params: PoseChainParams): any {
+  const fps: number = input.fps;
+  const gaps = new Map<number, number>((input.gaps ?? []).map((g: [number, number]) => [g[0], g[1]]));
+  const pipe = new PosePipeline(params, { tracker: true });
+  const m = /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/.exec(input.start)!;
+  const start = Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!);
+  const timeline = new ActivityTimeline(start, params.events.timeline.max_step_s);
+  const summary = new ActivitySummary(params.common.still_motion_bodysizes_s, params.events.timeline.max_step_s, params.activity.min_report_s);
+  (input.landmarks as (number[][] | null)[]).forEach((frame, i) => {
+    const t: number = input.t ? input.t[i] : i / fps;
+    const lm = frame ? expandLandmarks(frame, input.landmark_indices) : null;
+    const { state } = pipe.step(t, lm, input.aspect, gaps.get(i) ?? 0);
+    timeline.update(state);
+    summary.update(state);
+  });
+  return { timeline: timeline.toDict(), summary: summary.toDict() };
 }

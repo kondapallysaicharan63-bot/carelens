@@ -194,3 +194,25 @@ export function handScript(hz: number, ampRmsPct = 2.5, seconds = 25, fps = 30, 
   }
   return { fps, landmarks, holdUntilPlay: true };
 }
+
+/**
+ * Scripted eye-aspect-ratio trace for the scripted face model: open EAR 0.30 with small noise, one blink every 60 / bpm seconds
+ * (first at 2 s), each ~0.2 s between its half-way crossings with 50 ms lid ramps down to 0.03. `ear[i]` is the value at i / fps.
+ * Truth: `blinks` blink start times (s). Synthetic only.
+ */
+export function blinkScript(bpm = 15, seconds = 160, fps = 30): { fps: number; ear: number[]; blinks: number[] } {
+  const r = rng(515), open = 0.30, shut = 0.03, ramp = 0.05, dur = 0.2, period = 60 / bpm;
+  const blinks: number[] = [];
+  for (let a = 2; a < seconds - 1; a += period) blinks.push(a);
+  const ear: number[] = [];
+  for (let i = 0; i < Math.round(seconds * fps); i++) {
+    const t = i / fps;
+    let openness = 1;
+    for (const a of blinks) {
+      const down = Math.min(1, Math.max(0, (t - (a - ramp / 2)) / ramp)), up = Math.min(1, Math.max(0, (t - (a + dur - ramp / 2)) / ramp));
+      openness = Math.min(openness, 1 - (1 - shut / open) * (down - up));
+    }
+    ear.push(open * openness + 0.004 * normal(r) * openness);
+  }
+  return { fps, ear, blinks };
+}

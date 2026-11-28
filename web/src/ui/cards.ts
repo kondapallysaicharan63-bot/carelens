@@ -35,10 +35,12 @@ export const TIER1: [string, string][] = [
   ['Fall and inactivity check-in', 'Suggests a check-in; it does not call anyone.'],
   ['Cough sounds', 'On-device sound classification.'],
 ];
+export const BLINK_TITLE = 'Blinks & eyes-closed time';
 export const TIER2: [string, string][] = [
   ['Heart-rate variability', 'Fingertip only. Experimental.'],
   ['Sit-to-stand and walking speed', 'Experimental movement trends.'],
   ['Hand movement', 'Experimental; a rhythmic hand movement trend.'],
-  ['Blink rate and eye closure', 'Experimental.'],
+  [BLINK_TITLE, 'Experimental. Needs the camera.'],
+  ['Activity', 'Experimental. Time active, still and away.'],
   ['Snoring', 'Experimental.'],
 ];

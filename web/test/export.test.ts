@@ -33,7 +33,7 @@ describe('session schema validator', () => {
     expect(schema.$defs.event.properties.kind.enum).toEqual([...EVENT_KINDS]);
     expect(schema.properties.modes.items.enum).toEqual([...MODES]);
     expect(schema.$defs.summary.properties.kind.enum).toEqual([...SUMMARY_KINDS]);
-    expect(Object.keys(schema.$defs.summary.properties).sort()).toEqual(['amp_pct', 'cadence_spm', 'duration_s', 'freq_hz', 'kept_frac', 'kind', 'mean_hr_bpm', 'n_beats', 'n_kept', 'p2p_pct', 'phases_s', 'quality', 'reason', 'rep_times_s', 'reported', 'reps', 'rmssd_ms', 'sdnn_ms', 'speed_m_s', 't', 'time_s', 'wall']);
+    expect(Object.keys(schema.$defs.summary.properties).sort()).toEqual(['absent_min', 'active_min', 'amp_pct', 'blinks_per_min', 'cadence_spm', 'duration_s', 'eyes_closed_pct', 'freq_hz', 'kept_frac', 'kind', 'long_closures', 'longest_still_min', 'mean_hr_bpm', 'n_beats', 'n_kept', 'p2p_pct', 'phases_s', 'quality', 'reason', 'rep_times_s', 'reported', 'reps', 'rmssd_ms', 'sdnn_ms', 'speed_m_s', 'still_min', 't', 'time_s', 'wall']);
     expect(schema.properties.device.properties.user_agent_family.enum).toEqual([...UA_FAMILIES]);
   });
   const bad: [string, (s: any) => void, string][] = [
@@ -224,6 +224,9 @@ describe('production build contains no e2e provider', () => {
       expect(text, f).not.toContain('CARELENS_E2E_SCRIPTED_HAND');
       expect(text, f).not.toContain('__E2E_HAND__');
       expect(text, f).not.toContain('scriptedHand');
+      expect(text, f).not.toContain('CARELENS_E2E_SCRIPTED_FACE');
+      expect(text, f).not.toContain('__E2E_FACE__');
+      expect(text, f).not.toContain('scriptedFace');
     }
   });
 });

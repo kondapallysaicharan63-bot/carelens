@@ -591,6 +591,85 @@ class Tremor(_M):
         return self
 
 
+def blink_errors(p: dict) -> List[str]:
+    """Consistency checks for ``blink`` (mirrored by blinkErrors in web/src/core/blink.ts)."""
+    e: List[str] = []
+    for side in ("left", "right"):
+        pts = p["eye_landmarks"][side]
+        if len(pts) != 6 or len(set(pts)) != 6 or min(pts) < 0:
+            e.append(f"eye_landmarks.{side} must be 6 distinct landmark indices (p1..p6: corner, 2 upper lid, corner, 2 lower lid)")
+    if sorted(p["pose_landmarks"]) != ["chin", "forehead", "nose"]:
+        e.append("pose_landmarks needs exactly nose, forehead, chin")
+    if not 0 < p["perclos_frac"] < p["closed_frac"] < p["reopen_frac"] < 1:
+        e.append("need 0 < perclos_frac < closed_frac < reopen_frac < 1")
+    if not 0 < p["blink_min_ms"] < p["blink_max_ms"]:
+        e.append("need 0 < blink_min_ms < blink_max_ms")
+    if not 0 < p["min_window_s"] <= p["rate_window_s"]:
+        e.append("need 0 < min_window_s <= rate_window_s")
+    if not 0 < p["baseline_pct"] <= 100:
+        e.append("baseline_pct must be in (0, 100]")
+    if not p["min_rate_hz"] >= 1000.0 / p["blink_min_ms"]:
+        e.append("min_rate_hz is too low to resolve blink_min_ms")
+    for k in ("baseline_s", "fps_window_s", "max_dt_s", "min_eye_width", "max_ear", "yaw_max_ratio", "pitch_tol", "pitch_neutral", "min_rate_hz"):
+        if not p[k] > 0:
+            e.append(f"{k} must be > 0")
+    if not p["max_dt_s"] < p["fps_window_s"]:
+        e.append("need max_dt_s < fps_window_s")
+    return e
+
+
+class EyeLandmarks(_M):
+    left: List[int]
+    right: List[int]
+
+
+class PoseLandmarks(_M):
+    nose: int
+    forehead: int
+    chin: int
+
+
+class Blink(_M):
+    """Blink rate, eyes-closed time and long closures from FaceLandmarker eye points (W9, Experimental)."""
+    eye_landmarks: EyeLandmarks
+    pose_landmarks: PoseLandmarks
+    baseline_s: float
+    baseline_pct: float
+    closed_frac: float
+    reopen_frac: float
+    perclos_frac: float
+    blink_min_ms: float
+    blink_max_ms: float
+    rate_window_s: float
+    min_window_s: float
+    min_rate_hz: float
+    fps_window_s: float
+    max_dt_s: float
+    min_eye_width: float
+    max_ear: float
+    yaw_max_ratio: float
+    pitch_neutral: float
+    pitch_tol: float
+
+    @model_validator(mode="after")
+    def _check(self) -> "Blink":
+        errs = blink_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
+class Activity(_M):
+    """Active / still / away time over a session (W9, Experimental): the session is reported once this long."""
+    min_report_s: float
+
+    @model_validator(mode="after")
+    def _check(self) -> "Activity":
+        if not self.min_report_s > 0:
+            raise ValueError("min_report_s must be > 0")
+        return self
+
+
 class Params(_M):
     version: int
     description: str
@@ -608,6 +687,8 @@ class Params(_M):
     rppg: Rppg
     breathing_signal: BandReserved
     tremor: Tremor
+    blink: Blink
+    activity: Activity
     mobility: Mobility
     audio: Audio
 

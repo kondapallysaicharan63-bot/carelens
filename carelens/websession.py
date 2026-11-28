@@ -27,16 +27,18 @@ _OPTIONAL_TOP = ("truncated", "summaries")
 _EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
 _EV_REQ = ("t", "wall", "kind")
 _EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
-SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor")
+SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity")
 MOBILITY_KINDS = SUMMARY_KINDS[1:5]
 PHASE_KEYS = ("rise", "walk_out", "turn_1", "walk_back", "turn_2", "sit")
 MAX_REP_TIMES = 100
 # reported rows must carry this headline number (kind -> required fields)
 _SUM_HEADLINE = {"hrv": ("rmssd_ms", "sdnn_ms"), "chair_stand_30s": ("reps",), "sit_to_stand_5x": ("time_s",), "tug": ("time_s",),
-                 "walking_speed": ("speed_m_s",), "hand_tremor": ("freq_hz", "amp_pct")}
+                 "walking_speed": ("speed_m_s",), "hand_tremor": ("freq_hz", "amp_pct"), "blink": ("blinks_per_min", "eyes_closed_pct"),
+                 "activity": ("active_min", "still_min", "absent_min")}
 _SUM_REQ = ("t", "wall", "kind", "reported", "reason")
 _SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s",
-                      "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s", "freq_hz", "amp_pct", "p2p_pct")
+                      "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s", "freq_hz", "amp_pct", "p2p_pct",
+                      "blinks_per_min", "eyes_closed_pct", "long_closures", "active_min", "still_min", "absent_min", "longest_still_min")
 
 
 class SessionError(ValueError):
@@ -219,6 +221,14 @@ def _summary_errors(e, w: str, errs: list) -> None:
     for k in ("amp_pct", "p2p_pct"):
         if k in e and not (_num(e[k]) and e[k] >= 0):
             errs.append(f"{w}.{k}: expected a number >= 0")
+    # W9 blink rate / eyes-closed time and activity level (wellbeing trends; minutes and percent, no interpretation)
+    for k in ("blinks_per_min", "active_min", "still_min", "absent_min", "longest_still_min"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
+    if "eyes_closed_pct" in e and not (_num(e["eyes_closed_pct"]) and 0 <= e["eyes_closed_pct"] <= 100):
+        errs.append(f"{w}.eyes_closed_pct: expected a number in [0, 100]")
+    if "long_closures" in e and not (_int(e["long_closures"]) and e["long_closures"] >= 0):
+        errs.append(f"{w}.long_closures: expected an integer >= 0")
     if "phases_s" in e:
         ph = e["phases_s"]
         if not isinstance(ph, dict):

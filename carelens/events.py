@@ -176,6 +176,55 @@ class ActivityTimeline:
                 for h, v in sorted(self.buckets.items())}
 
 
+class ActivitySummary:
+    """Time active vs still vs away over a session (W9, Experimental), from the same per-frame motion signal the
+    inactivity detector uses.
+
+    Each step ``dt = t - previous t`` goes to exactly one of (a step above ``timeline.max_step_s`` is an outage: it credits 0 s and
+    the frame starts a new still stretch at 0; ``ActivityTimeline`` instead caps such a step) goes to exactly one of: ``absent`` (nobody in view), ``still`` (present, ``motion`` <= the still-motion threshold)
+    or ``active`` (present, moving). The longest still stretch is the longest run of consecutive still steps; a movement,
+    an absence or an outage (raw step above the cap) ends a stretch. A wellbeing trend, not an assessment."""
+
+    def __init__(self, still_motion: float = _STILL, max_step_s: float = PARAMS.events.timeline.max_step_s,
+                 min_report_s: float = PARAMS.activity.min_report_s):
+        self.still_motion = still_motion
+        self.max_step_s = max_step_s
+        self.min_report_s = min_report_s
+        self.active_s = self.still_s = self.absent_s = 0.0
+        self.longest_still_s = 0.0
+        self._run = 0.0
+        self._last_t: Optional[float] = None
+
+    def update(self, s: BodyState):
+        if self._last_t is not None:
+            raw = s.t - self._last_t
+            outage = raw > self.max_step_s
+            if outage:
+                self._run = 0.0            # unobserved time breaks a still stretch and is credited to nothing
+            dt = 0.0 if outage else raw
+            if not s.present:
+                self.absent_s += dt
+                self._run = 0.0
+            elif s.motion > self.still_motion:
+                self.active_s += dt
+                self._run = 0.0
+            else:
+                self.still_s += dt
+                self._run += dt
+                self.longest_still_s = max(self.longest_still_s, self._run)
+        self._last_t = s.t
+
+    @property
+    def total_s(self) -> float:
+        return self.active_s + self.still_s + self.absent_s
+
+    def to_dict(self):
+        ok = self.total_s >= self.min_report_s
+        return {"reported": ok, "reason": "ok" if ok else "too_short", "active_s": self.active_s, "still_s": self.still_s,
+                "absent_s": self.absent_s, "total_s": self.total_s, "longest_still_s": self.longest_still_s,
+                "active_min": self.active_s / 60.0}
+
+
 class GaitAnalyzer:
     """Walking speed and steadiness for each crossing of the room.
 

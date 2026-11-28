@@ -21,6 +21,7 @@ import numpy as np
 
 from . import pose as P
 from dataclasses import replace
+from datetime import datetime
 
 from .events import FallDetector, InactivityDetector
 from .features import FeatureExtractor
@@ -33,6 +34,8 @@ from .synth import ASPECT, Scenario, Segment
 from . import synth as SY
 from .mobility import MOBILITY_INDICES, run_mobility
 from .tremor import run_tremor, synth_hand
+from .blink import run_blink, synth_face
+from .events import ActivitySummary, ActivityTimeline
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 from . import audio as AU
 
@@ -158,6 +161,27 @@ def run_pose_chain(inp: dict) -> dict:
                    "presence_runs": presence})
 
 
+def run_activity(inp: dict) -> dict:
+    """The pose chain (as ``run_pose_chain``: tracker, held frames, camera gaps) feeding ``ActivityTimeline`` and
+    ``ActivitySummary``. ``start`` is the naive wall-clock start of the clip (hour buckets). Frame times are ``t[]``."""
+    fps, aspect, indices = inp["fps"], inp["aspect"], inp["landmark_indices"]
+    gaps = {int(i): g for i, g in inp.get("gaps", [])}
+    feats, tracker = FeatureExtractor(aspect=aspect), PresenceTracker()
+    timeline = ActivityTimeline(datetime.strptime(inp["start"], "%Y-%m-%d %H:%M:%S"))
+    summary = ActivitySummary()
+    s = None
+    for i, frame in enumerate(inp["landmarks"]):
+        t = inp["t"][i] if "t" in inp else i / fps
+        if gaps.get(i, 0.0) > 0:
+            tracker.skip_gap(gaps[i])
+            feats.reset()
+        lm, held = tracker.update(t, _landmarks(frame, indices) if frame is not None else None, aspect)
+        s = replace(s, t=t) if (held and s is not None) else feats.update(t, lm)
+        timeline.update(s)
+        summary.update(s)
+    return _round({"timeline": {h: dict(v) for h, v in timeline.to_dict().items()}, "summary": summary.to_dict()})
+
+
 RUNNERS: dict[str, Callable[[dict], dict]] = {
     "roi_trace_hr": run_hr_trace,
     "chest_trace_breathing": run_breathing_trace,
@@ -171,6 +195,8 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "audio_label_events": AU.run_label_events,
     "mobility": run_mobility,
     "tremor": run_tremor,
+    "blink": run_blink,
+    "activity": run_activity,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
@@ -188,6 +214,9 @@ TOL_MOBILITY = {"mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadenc
                 "reported": "exact", "reason": "exact", "reps": "exact", "partial_rises": "exact", "stands": "exact",
                 "n_segments": "exact", "n_not_side_on": "exact", "rep_in_progress": "exact"}
 TOL_TREMOR = {"freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "reported": "exact", "reason": "exact", "n_frames": "exact"}
+TOL_BLINK = {"blink_t_s": 0.05, "blink_rate": 0.05, "perclos": 0.005, "ear": 0.005, "quality": 0.01, "reported": "exact",
+             "reason": "exact", "long_closures": "exact", "n_blinks": "exact", "window_s": 0.1}
+TOL_ACTIVITY = {"act_time_s": 0.1, "reported": "exact", "reason": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -242,7 +271,7 @@ def _lm(name, desc, segs, seed, config=None, fps=15.0):
     return _fixture(name, desc, "landmarks", inp, TOL_EVENTS)
 
 
-def _chain(name, desc, segs, seed, fps=15.0, dropouts=(), gaps=(), config=None):
+def _chain(name, desc, segs, seed, fps=15.0, dropouts=(), gaps=(), config=None, level="pose_chain", tol=None, extra=None):
     """pose_chain fixture: scenario landmarks with ``dropouts`` [(t0, t1)) set to no-person and camera ``gaps``
     [(t_observed, gap_s)] (timestamps after a gap jump by gap_s; the pipeline is told via ``gaps``)."""
     scn = Scenario(segs, jitter=0.0008, seed=seed)
@@ -264,7 +293,8 @@ def _chain(name, desc, segs, seed, fps=15.0, dropouts=(), gaps=(), config=None):
         inp["gaps"] = gap_list
     if config:
         inp["config"] = config
-    return _fixture(name, desc, "pose_chain", inp, TOL_EVENTS)
+    inp.update(extra or {})
+    return _fixture(name, desc, level, inp, tol or TOL_EVENTS)
 
 
 def _ppg(name, desc, dur=40.0, bpm=72.0, seed=0, **kw):
@@ -449,6 +479,43 @@ def _tremor_fixtures() -> list:
     ]
 
 
+def _blink_fixtures() -> list:
+    def bl(name, desc, **kw):
+        inp, _ = synth_face(**kw)
+        return _fixture(name, desc, "blink", inp, TOL_BLINK)
+    return [
+        bl("blink_8pm", "60 s synthetic face at 25 Hz, open EAR 0.27, about 8 blinks/min of 80-400 ms, landmark jitter 0.4 px: reported from about "
+           "40 s (20 s calibration + 20 s window).", duration=60.0, blinks_per_min=8, blink_ms_range=(80, 400), jitter_px=0.4, seed=901, open_ear=0.27),
+        bl("blink_15pm", "About 15 blinks/min of 80-400 ms, open EAR 0.32, jitter 0.4 px.",
+           duration=60.0, blinks_per_min=15, blink_ms_range=(80, 400), jitter_px=0.4, seed=902, open_ear=0.32),
+        bl("blink_25pm", "About 25 blinks/min of 80-300 ms, open EAR 0.25, jitter 0.4 px.",
+           duration=60.0, blinks_per_min=25, blink_ms_range=(80, 300), jitter_px=0.4, seed=903, open_ear=0.25),
+        bl("blink_long_closures", "Four 1.2-1.6 s eye closures (long closures, not blinks) and blinks at 10/min: long closures counted, "
+           "eyes-closed time well above the blink-only level.", duration=60.0, blinks_per_min=10, blink_ms=150, jitter_px=0.4, seed=904,
+           closures=[(28.0, 29.4), (36.0, 37.6), (44.0, 45.2), (52.0, 53.5)]),
+        bl("blink_head_turned", "15 blinks/min with the head turned (nose shifted 0.5 eye distances) from 40 s to 50 s: head_turned, "
+           "no counting there.", duration=60.0, blinks_per_min=15, blink_ms=150, jitter_px=0.4, seed=905,
+           yaw_segments=[(40.0, 50.0, 0.5)]),
+        bl("blink_low_fps", "15 distinct frames per second: low_fps, withheld, never a guess.",
+           duration=45.0, fps=15.0, blinks_per_min=15, blink_ms=200, jitter_px=0.4, seed=906),
+    ]
+
+
+def _activity_fixtures() -> list:
+    start = "2026-01-05 08:55:00"
+    return [
+        _chain("activity_session", "Walk 10 s, sit still 40 s, leave the view 8 s, come back and stand still 20 s, walk 6 s: active, still and "
+               "absent time, longest still stretch, posture-by-hour buckets across the 09:00 boundary.",
+               [Segment("walk", 10, x0=0.2, x1=0.6), Segment("still", 40, posture="sit", x0=0.6), Segment("absent", 8),
+                Segment("still", 20, posture="stand", x0=0.5), Segment("walk", 6, x0=0.5, x1=0.2)], 951,
+               level="activity", tol=TOL_ACTIVITY, extra={"start": start}, fps=8.0),
+        _chain("activity_gap_dropout", "Sit still 30 s with a 0.4 s dropout (held) and a 20 s camera outage in the middle: the outage is not "
+               "credited and ends the still stretch.",
+               [Segment("still", 60, posture="sit", x0=0.5)], 952, dropouts=[(10.0, 10.4)], gaps=[(30.0, 20.0)],
+               level="activity", tol=TOL_ACTIVITY, extra={"start": "2026-01-05 23:59:30"}, fps=8.0),
+    ]
+
+
 def generate_all() -> dict[str, str]:
     fx = [
         _hr("hr_green_60bpm", 60, 11, "Green-channel ROI mean, 60 bpm, noise."),
@@ -545,7 +612,7 @@ def generate_all() -> dict[str, str]:
         _rppg("rppg_disagree_flicker",
               "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
               32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
-    ] + _audio_fixtures() + _mobility_fixtures() + _tremor_fixtures()
+    ] + _audio_fixtures() + _mobility_fixtures() + _tremor_fixtures() + _blink_fixtures() + _activity_fixtures()
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
 
@@ -563,8 +630,13 @@ _MOB_TOL_KEYS = {"time_s": "mob_time_s", "rep_times_s": "mob_time_s", "rise": "m
 # tremor fixtures only: amplitudes compare RELATIVELY (tolerance = amp_rel * |expected|), frequency in Hz
 _TREMOR_TOL_KEYS = {"freq_hz": "freq_hz", "amp_pct": "amp_rel", "p2p_pct": "amp_rel", "rms_pct": "amp_rel", "motion_pct": "amp_rel",
                     "prominence": "prominence"}
+_BLINK_TOL_KEYS = {"t_start": "blink_t_s", "t_end": "blink_t_s", "t": "blink_t_s", "blinks_per_min": "blink_rate", "perclos": "perclos",
+                   "ear": "ear", "baseline": "ear", "coverage": "quality", "window_s": "window_s", "fps": "blink_rate"}
+# activity fixtures: every seconds figure (posture buckets, active / still / absent / longest still)
+_ACTIVITY_TOL_KEYS = {k: "act_time_s" for k in ("sitting", "standing", "walking", "lying", "absent", "active_s", "still_s", "absent_s",
+                                                 "total_s", "longest_still_s", "active_min")}
 _TOL_RELATIVE = {"amp_rel"}
-_TOL_DEFAULTS = {"freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
+_TOL_DEFAULTS = {"blink_t_s": 0.05, "blink_rate": 0.05, "perclos": 0.005, "ear": 0.005, "window_s": 0.1, "act_time_s": 0.1, "freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
                  "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4, "mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 
@@ -578,7 +650,7 @@ def compare_outputs(fx: dict, actual, expected=None) -> list[str]:
     tol = fx["tolerance"]
     errs: list[str] = []
 
-    keys = {"mobility": _MOB_TOL_KEYS, "tremor": _TREMOR_TOL_KEYS}.get(fx.get("input_level"), _TOL_KEYS)
+    keys = {"mobility": _MOB_TOL_KEYS, "tremor": _TREMOR_TOL_KEYS, "blink": _BLINK_TOL_KEYS, "activity": _ACTIVITY_TOL_KEYS}.get(fx.get("input_level"), _TOL_KEYS)
 
     def tol_for(field, e=0.0):
         key = keys.get(field)

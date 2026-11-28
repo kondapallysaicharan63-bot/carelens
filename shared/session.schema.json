@@ -52,14 +52,16 @@
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "chair_stand_30s" } }, "required": ["reported", "kind"] }, "then": { "required": ["reps"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "enum": ["sit_to_stand_5x", "tug"] } }, "required": ["reported", "kind"] }, "then": { "required": ["time_s"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "walking_speed" } }, "required": ["reported", "kind"] }, "then": { "required": ["speed_m_s"] } },
-        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "hand_tremor" } }, "required": ["reported", "kind"] }, "then": { "required": ["freq_hz", "amp_pct"] } }
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "hand_tremor" } }, "required": ["reported", "kind"] }, "then": { "required": ["freq_hz", "amp_pct"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "blink" } }, "required": ["reported", "kind"] }, "then": { "required": ["blinks_per_min", "eyes_closed_pct"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "activity" } }, "required": ["reported", "kind"] }, "then": { "required": ["active_min", "still_min", "absent_min"] } }
       ],
       "properties": {
         "t": { "type": "number", "minimum": 0, "description": "seconds since started_at when the result was produced" },
         "wall": { "type": "string" },
-        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor"], "description": "hrv (W6), a W7 guided mobility test or the W8 rhythmic-hand-movement test; wellbeing trends only" },
+        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity"], "description": "hrv (W6), a W7 guided mobility test, the W8 rhythmic-hand-movement test, the W9 blink / eyes-closed summary or the W9 activity summary; wellbeing trends only" },
         "reported": { "type": "boolean" },
-        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility); ok | no_hand | too_short | low_fps | moving | no_rhythm (hand_tremor)" },
+        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility); ok | no_hand | too_short | low_fps | moving | no_rhythm (hand_tremor); ok | no_face | low_fps | head_turned | calibrating (blink); ok | too_short (activity)" },
         "rmssd_ms": { "type": "number", "minimum": 0 },
         "sdnn_ms": { "type": "number", "minimum": 0 },
         "mean_hr_bpm": { "type": "number", "exclusiveMinimum": 0 },
@@ -76,6 +78,13 @@
         "freq_hz": { "type": "number", "exclusiveMinimum": 0, "description": "hand_tremor: frequency (3-12 Hz) of the rhythmic hand movement" },
         "amp_pct": { "type": "number", "minimum": 0, "description": "hand_tremor: RMS amplitude as % of hand size" },
         "p2p_pct": { "type": "number", "minimum": 0, "description": "hand_tremor: peak-to-peak amplitude as % of hand size" },
+        "blinks_per_min": { "type": "number", "minimum": 0, "description": "blink: blinks per minute over the last minute of counted time" },
+        "eyes_closed_pct": { "type": "number", "minimum": 0, "maximum": 100, "description": "blink: share of the last minute the eyes were almost shut (PERCLOS, in %)" },
+        "long_closures": { "type": "integer", "minimum": 0, "description": "blink: closures longer than a blink (over 0.5 s) in the last minute" },
+        "active_min": { "type": "number", "minimum": 0, "description": "activity: minutes moving while in view this session" },
+        "still_min": { "type": "number", "minimum": 0, "description": "activity: minutes in view and still" },
+        "absent_min": { "type": "number", "minimum": 0, "description": "activity: minutes with nobody in view" },
+        "longest_still_min": { "type": "number", "minimum": 0, "description": "activity: longest uninterrupted still stretch, minutes" },
         "phases_s": { "type": "object", "additionalProperties": false, "properties": { "rise": { "type": "number", "minimum": 0 }, "walk_out": { "type": "number", "minimum": 0 }, "turn_1": { "type": "number", "minimum": 0 }, "walk_back": { "type": "number", "minimum": 0 }, "turn_2": { "type": "number", "minimum": 0 }, "sit": { "type": "number", "minimum": 0 } }, "description": "tug: phase durations" }
       }
     },

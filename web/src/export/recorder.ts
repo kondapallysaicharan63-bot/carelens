@@ -113,6 +113,18 @@ export class SessionRecorder {
     return row;
   }
 
+  /** One row per kind that is refreshed while a measurement runs (W9 blink / activity): replaces the last row of that kind in place
+   *  (new time, new fields), or adds it. Returns the stored row or null at the cap. */
+  upsertSummary(s: MobilitySummaryFields): SummaryRow | null {
+    let at = -1;
+    for (let i = this.summaries.length - 1; i >= 0; i--) if (this.summaries[i]!.kind === s.kind) { at = i; break; }
+    const t = r3(this.now());
+    if (at < 0) return this.addMobilitySummary(s);
+    const row: SummaryRow = { ...s, t, wall: this.wall(t) };
+    this.summaries[at] = row;
+    return row;
+  }
+
   updateSummary(row: SummaryRow, s: { reported: boolean; reason: string; rmssd_ms: number | null; sdnn_ms: number | null; mean_hr_bpm: number | null; n_beats: number; n_kept: number; kept_frac: number; duration_s: number }): void {
     const ok = s.reported && s.rmssd_ms !== null && s.sdnn_ms !== null;
     row.t = r3(this.now()); row.wall = this.wall(row.t);

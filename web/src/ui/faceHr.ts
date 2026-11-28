@@ -5,6 +5,7 @@
 import params from '../../../shared/params.json';
 import { FaceRPPG, assertRppgParams, type RppgParams, type RppgReason, type RppgUpdate } from '../core/rppg';
 import { FrameClock } from '../capture/ppgSampler';
+import { DistinctFrames } from '../capture/distinct';
 import type { FrameMeta } from '../capture/frames';
 import { FaceRoiSampler, contentRect, eyeSpan, faceMotion, polysCentroid, roiPolygons, type Pt, type RoiPolys } from '../capture/faceRoi';
 import { PoseScheduler } from '../core/scheduler';
@@ -60,8 +61,14 @@ export interface FaceHandle {
   close(): void;
 }
 
+/** One DISTINCT camera frame for the blink measurement (W9): landmarks (null = no face) and whether distinct-frame detection was
+ *  possible (false: timing could not be verified, so the consumer must not trust the frame rate). */
+export interface FaceFrame { t: number; lm: Pt[] | null; aspect: number; reliable: boolean }
+
 export interface FaceHooks {
   onUpdate(u: RppgUpdate): void;
+  /** every distinct frame while the blink measurement is wanted (the face model is shared with the heart-rate card) */
+  onLandmarks?(f: FaceFrame): void;
   /** every frame: the ROI polygons in normalised image coordinates, or null when no face */
   onOutline(polys: RoiPolys | null, videoW: number, videoH: number): void;
   /** frame processing threw (true) / recovered (false) */
@@ -83,6 +90,10 @@ export class FaceHrSession {
   private prevT = 0;
   private active = true;
   private paused = false;
+  private blinkWanted = false;
+  private readonly blinkClock = new FrameClock();
+  private readonly distinct = new DistinctFrames();
+  private lastLm: Pt[] | null = null;
 
   constructor(private readonly subscribe: Subscribe, private readonly hooks: FaceHooks) {}
 
@@ -105,10 +116,19 @@ export class FaceHrSession {
     this.applyRunning();
   }
 
+  /** The blink card shares this session: the model also runs while it is switched on, even with face heart rate off. */
+  setBlinkActive(on: boolean): void {
+    if (this.blinkWanted === on) return;
+    this.blinkWanted = on;
+    this.blinkClock.reset(); this.distinct.reset(); this.lastLm = null;
+    if (!on && !(this.active && !this.paused)) this.hooks.onOutline(null, 0, 0); // the outline belongs to face heart rate while it runs
+  }
+
   /** Hold the face model while the hand test runs (independent of the user's face-HR switch); the window restarts on resume. */
   setPaused(paused: boolean): void {
     if (this.paused === paused) return;
     this.paused = paused;
+    this.blinkClock.reset(); this.distinct.reset(); this.lastLm = null; // the blink window restarts after a pause
     this.applyRunning();
   }
 
@@ -124,6 +144,7 @@ export class FaceHrSession {
     this.stopLoop = null;
     if (this.ended || !this.handle || !this.video) return;
     this.core.reset(); this.clock.reset(); this.prev = null;
+    this.blinkClock.reset(); this.distinct.reset(); this.lastLm = null;
     const video = this.video;
     this.stopLoop = this.subscribe(video, (now, meta) => this.onFrame(video, now, meta));
   }
@@ -150,28 +171,51 @@ export class FaceHrSession {
   }
 
   private processFrame(video: HTMLVideoElement, now: number, meta?: FrameMeta): void {
-    if (this.ended || !this.handle || !PoseScheduler.shouldRunFace(this.active && !this.paused) || video.videoWidth === 0 || video.readyState < 2) return;
-    const t = this.clock.time(now, meta);
-    if (t === null) return;
+    const hrOn = this.active && !this.paused;
+    const blinkOn = this.blinkWanted && !this.paused;
+    if (this.ended || !this.handle || !PoseScheduler.shouldRunFace(hrOn || blinkOn) || video.videoWidth === 0 || video.readyState < 2) return;
+    const aspect = video.videoWidth / video.videoHeight;
+    const t = hrOn ? this.clock.time(now, meta) : null;
+    // the blink path has its own clock and distinct-frame check (W8's approach: a repeated display callback is not a camera frame)
+    const tb = blinkOn ? this.blinkClock.time(now, meta) : null;
+    const verdict = blinkOn ? this.distinct.check(video, meta, tb) : 'skip';
+    const hrFrame = hrOn && t !== null;
+    const blinkFrame = blinkOn && verdict !== 'skip' && tb !== null;
+    if (!hrFrame && !blinkFrame) return;
     const lm = this.handle.detect(video, now);
+    if (blinkFrame) {
+      let emit = true;
+      if (verdict === 'unknown') {
+        // last resort (no per-frame signal): identical landmarks mean the same camera frame again; the frame is flagged reliable: false
+        if (lm && this.lastLm && sameFace(lm, this.lastLm)) emit = false;
+        this.lastLm = lm;
+      }
+      if (emit) this.hooks.onLandmarks?.({ t: tb!, lm, aspect, reliable: verdict === 'new' });
+    }
+    if (!hrFrame) return;
     let u: RppgUpdate | null;
     if (!lm) {
       this.prev = null;
       this.hooks.onOutline(null, video.videoWidth, video.videoHeight);
-      u = this.core.update(t, null, 0, 0, 0);
+      u = this.core.update(t!, null, 0, 0, 0);
     } else {
       const polys = roiPolygons(lm, RPPG_PARAMS.roi_landmarks);
       this.hooks.onOutline(polys, video.videoWidth, video.videoHeight);
-      const aspect = video.videoWidth / video.videoHeight;
       const c = polysCentroid(polys);
-      const motion = faceMotion(this.prev, c, t - this.prevT, eyeSpan(lm, aspect), aspect);
-      this.prev = c; this.prevT = t;
+      const motion = faceMotion(this.prev, c, t! - this.prevT, eyeSpan(lm, aspect), aspect);
+      this.prev = c; this.prevT = t!;
       const s = this.sampler.sample(video, polys);
       if (!s) return; // empty mask (polygons fully outside the frame)
-      u = this.core.update(t, s.rgb, s.px, motion, s.brightness, s.skinFrac);
+      u = this.core.update(t!, s.rgb, s.px, motion, s.brightness, s.skinFrac);
     }
     if (u) this.hooks.onUpdate(u);
   }
+}
+
+function sameFace(a: Pt[], b: Pt[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i]!.x !== b[i]!.x || a[i]!.y !== b[i]!.y) return false;
+  return true;
 }
 
 /** Draws the ROI polygons on an overlay canvas that covers the video element; polygons are mapped into the

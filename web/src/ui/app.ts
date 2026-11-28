@@ -4,12 +4,13 @@ import { onVideoFrame } from '../capture/frames';
 import { PoseSession } from '../capture/poseSession';
 import { createPoseLandmarker } from '../capture/pose';
 import { createHandLandmarker } from '../capture/hand';
+import { PauseGroup } from '../capture/pauseGroup';
 import { VideoChestSource } from '../capture/chestSampler';
 import params from '../../../shared/params.json';
 import { createFaceLandmarker } from '../capture/face';
 import { openStreamWithFallback, stopStream } from '../capture/session';
 import { safeGet, safeRemove, safeSet } from '../storage';
-import { makeCard, TIER1, TIER2, type Card } from './cards';
+import { BLINK_TITLE, makeCard, TIER1, TIER2, type Card } from './cards';
 import { buildFingertipView, FingertipSession, HRV_PARAMS } from './fingertip';
 import { HRV_NOTE, HRV_OFF_TEXT } from './hrvCard';
 import { HrvRecorder } from '../export/hrv';
@@ -27,6 +28,8 @@ import { SessionRecorder } from '../export/recorder';
 import type { Mode as RecMode } from '../export/schema';
 import { BreathCameraLogger } from '../export/breathCamera';
 import { CoughRecorder } from '../export/cough';
+import { BLINK_NOTE, buildBlinkCard, type BlinkCard } from './blinkCard';
+import { ACTIVITY_NOTE, buildActivityCard, type ActivityCard } from './activityCard';
 import { buildTremorTest, TREMOR_NOTE, TREMOR_PARAMS, type TremorTest } from './tremorTest';
 import { buildMovementTests, MOVEMENT_PARAMS, MOVEMENT_NOTE, type MovementTests } from './movementTests';
 
@@ -39,6 +42,8 @@ export function mountApp(root: HTMLElement): void {
   let choice: CaptureChoice = {};
   let poseSession: PoseSession | null = null;
   let faceSession: FaceHrSession | null = null;
+  /** pose and face sessions (the blink card shares the face one) are held while the hand test runs, also ones created after it started */
+  const handTestHold = new PauseGroup();
   let fingertipSession: FingertipSession | null = null;
   let audioSession: AudioSession | null = null;
   let audioCards: AudioCards | null = null;
@@ -166,7 +171,7 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests, tremor?: TremorTest): HTMLElement {
+  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests, tremor?: TremorTest, blink?: BlinkCard, activity?: ActivityCard): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
@@ -187,6 +192,8 @@ export function mountApp(root: HTMLElement): void {
       if (t === 'Heart-rate variability') g2.append(makeCard(t, 2, HRV_NOTE, HRV_OFF_TEXT).root);
       else if (t === 'Sit-to-stand and walking speed') g2.append(movement ? movement.root : makeCard('Movement tests', 2, MOVEMENT_NOTE, 'Starts when the camera is on.').root);
       else if (t === 'Hand movement') g2.append(tremor ? tremor.root : makeCard('Hand movement', 2, TREMOR_NOTE, 'Starts when the camera is on.').root);
+      else if (t === BLINK_TITLE) g2.append(blink ? blink.root : makeCard(BLINK_TITLE, 2, BLINK_NOTE, 'Starts when the camera is on.').root);
+      else if (t === 'Activity') g2.append(activity ? activity.root : makeCard('Activity', 2, ACTIVITY_NOTE, 'Starts when the camera is on.').root);
       else g2.append(makeCard(t, 2, n).root);
     }
     e.append(g2);
@@ -197,8 +204,10 @@ export function mountApp(root: HTMLElement): void {
   // ---- live ----
   function stopAll(): void {
     gen++;
+    if (poseSession) handTestHold.remove(poseSession);
     poseSession?.end();
     poseSession = null;
+    if (faceSession) handTestHold.remove(faceSession);
     faceSession?.end();
     faceSession = null;
     fingertipSession?.end();
@@ -219,6 +228,7 @@ export function mountApp(root: HTMLElement): void {
     const g = ++gen;
     const rec = startRecorder([...(consent.state.camera ? ['camera' as const] : []), ...(consent.state.mic ? ['microphone' as const] : [])]);
     const pose = consent.state.camera ? buildPoseCards(qualityMeter) : undefined;
+    const activity = pose ? buildActivityCard({ record: (row) => void rec.upsertSummary(row) }) : undefined;
     const movement = pose ? buildMovementTests({ mp: MOVEMENT_PARAMS, record: (row) => void rec.addMobilitySummary(row), heightSaving: () => dataPanel.savingEnabled() }) : undefined;
     movementTests = movement ?? null;
     if (pose) {
@@ -230,6 +240,7 @@ export function mountApp(root: HTMLElement): void {
           h.onView(v);
           brLog.onView(v);
           movement?.onView(v);
+          activity?.onView(v);
         },
         onEvent(e) {
           h.onEvent(e);
@@ -244,7 +255,7 @@ export function mountApp(root: HTMLElement): void {
     // replay scripted hand landmarks instead; the condition is a build-time constant, so that provider is removed from production builds.
     const tremor = consent.state.camera
       ? buildTremorTest({
-        onActive: (active) => { if (active) movement?.reset(); poseSession?.setPaused(active); faceSession?.setPaused(active); },
+        onActive: (active) => { handTestHold.hold(active); if (active) movement?.reset(); },
         getDeclaredFps: () => stream?.getVideoTracks()[0]?.getSettings?.().frameRate ?? null,
         tp: TREMOR_PARAMS, record: (row) => void rec.addMobilitySummary(row), subscribe: onVideoFrame, getVideo: () => video,
         loadHand: async () => (import.meta.env.VITE_E2E === '1' ? (await import('../e2e/scriptedHand')).createScriptedHand : createHandLandmarker)(),
@@ -283,6 +294,13 @@ export function mountApp(root: HTMLElement): void {
         },
       };
     }
+    const blink = consent.state.camera
+      ? buildBlinkCard({ meter: qualityMeter, record: (row) => void rec.upsertSummary(row), getDeclaredFps: () => stream?.getVideoTracks()[0]?.getSettings?.().frameRate ?? null })
+      : undefined;
+    if (face && blink) {
+      const h = face.hooks;
+      face.hooks = { ...h, onLandmarks: (f) => blink.onFrame(f) };
+    }
     const audio = consent.state.mic ? buildAudioCards(qualityMeter) : null;
     if (audio) {
       const h = audio.hooks;
@@ -303,7 +321,7 @@ export function mountApp(root: HTMLElement): void {
     if (pose) live.append(pose.banner);
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face, audio, movement, tremor), dataPanel.root, notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio, movement, tremor, blink, activity), dataPanel.root, notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
@@ -359,6 +377,8 @@ export function mountApp(root: HTMLElement): void {
       }
       poseSession?.restart(); // re-bind the frame loops to the (new) stream
       faceSession?.restart();
+      blink?.reset(); // the eye baseline and the one-minute window start over with the new camera
+      activity?.breakStream();
       if (audioCards && stream) startAudio(g, audioCards, stream); // (re)start the audio chain; the cough count starts again
       return true;
     };
@@ -406,15 +426,25 @@ export function mountApp(root: HTMLElement): void {
     if (g !== gen) return;
     const fsession = new FaceHrSession(onVideoFrame, face!.hooks);
     faceSession = fsession;
+    handTestHold.add(fsession); // the hand test can start before the camera has opened
     face!.onActiveChange((a) => fsession.setActive(a));
-    const faceLoad = fsession.load(createFaceLandmarker, video).then(
-      () => { if (!fsession.isEnded) face!.setLoadState('ready'); },
-      (err) => { if (!fsession.isEnded) face!.setLoadState('failed', err instanceof Error ? err.message : String(err)); },
+    blink?.onActiveChange((a) => fsession.setBlinkActive(a)); // one face model for both cards: it runs while either is on
+    // End-to-end builds only (vite --mode e2e): replay scripted eye landmarks when the test page supplies them, else the real model.
+    const loadFace = import.meta.env.VITE_E2E === '1' ? async () => (await import('../e2e/scriptedFace')).createScriptedFace(createFaceLandmarker) : createFaceLandmarker;
+    const faceLoad = fsession.load(loadFace, video).then(
+      () => { if (!fsession.isEnded) { face!.setLoadState('ready'); blink?.setLoadState('ready'); } },
+      (err) => {
+        if (fsession.isEnded) return;
+        const m = err instanceof Error ? err.message : String(err);
+        face!.setLoadState('failed', m);
+        blink?.setLoadState('failed', m);
+      },
     );
 
     // Pose: presence, posture, fall + inactivity check-ins and breathing, scheduled at ~8 Hz (PoseScheduler).
     const session = new PoseSession(onVideoFrame, pose!.hooks, (v) => new VideoChestSource(v, params.chest_shift));
     poseSession = session;
+    handTestHold.add(session);
     pose!.onInactivityChange((sec) => session.setInactivitySeconds(sec));
     try {
       // End-to-end builds only (vite --mode e2e): replay a scripted landmark sequence instead of the real model.

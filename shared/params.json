@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 11,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -230,6 +230,33 @@
     "moving_max_pct": 8.0,
     "min_prominence": 0.3,
     "noise_floor_pct": 1.0
+  },
+  "blink": {
+    "eye_landmarks": {
+      "left": [33, 160, 158, 133, 153, 144],
+      "right": [362, 385, 387, 263, 373, 380]
+    },
+    "pose_landmarks": { "nose": 1, "forehead": 10, "chin": 152 },
+    "baseline_s": 20.0,
+    "baseline_pct": 90.0,
+    "closed_frac": 0.55,
+    "reopen_frac": 0.7,
+    "perclos_frac": 0.3,
+    "blink_min_ms": 50.0,
+    "blink_max_ms": 500.0,
+    "rate_window_s": 60.0,
+    "min_window_s": 20.0,
+    "min_rate_hz": 20.0,
+    "fps_window_s": 2.0,
+    "max_dt_s": 0.25,
+    "min_eye_width": 0.01,
+    "max_ear": 0.6,
+    "yaw_max_ratio": 0.25,
+    "pitch_neutral": 0.57,
+    "pitch_tol": 0.12
+  },
+  "activity": {
+    "min_report_s": 30.0
   },
   "mobility": {
     "min_visibility": 0.5,

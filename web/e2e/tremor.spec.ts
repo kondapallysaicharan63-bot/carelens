@@ -3,8 +3,7 @@ import { validateSession, type SessionExport } from '../src/export/schema';
 import { expect, launch, test } from './util';
 import { handScript, writeGreyY4m } from './media';
 
-// Rhythmic hand movement (W8). Headless Chromium delivers ~26 distinct camera frames/s here (the test needs > 25): do not run it under heavy CPU load.
-//  a scripted hand model (e2e build only) replays synthetic landmarks with a known frequency.
+// Rhythmic hand movement (W8): a scripted hand model (e2e build only) replays synthetic landmarks with a known frequency.
 const video = writeGreyY4m('grey30.y4m', 4, 30);
 test.use({ launchOptions: launch(`--use-file-for-fake-video-capture=${video}`) });
 

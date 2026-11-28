@@ -4,6 +4,7 @@
 import type { HandFrame } from '../core/tremor';
 import type { FrameMeta } from './frames';
 import type { HandHandle } from './hand';
+import { DistinctFrames } from './distinct';
 import { FrameClock } from './ppgSampler';
 
 export type FrameSubscriber = (video: HTMLVideoElement, cb: (nowMs: number, meta?: FrameMeta) => void) => () => void;
@@ -13,9 +14,7 @@ export class HandSession {
   private stopLoop: (() => void) | null = null;
   private ended = false;
   private clock = new FrameClock();
-  private lastMedia: number | null = null;
-  private mediaAdvanced = false;
-  private lastCounted: number | null = null;
+  private distinct = new DistinctFrames();
   private lastLm: number[][] | null = null;
   /** false once a frame arrived with no way to tell distinct camera frames from repeated display callbacks */
   timingReliable = true;
@@ -32,6 +31,7 @@ export class HandSession {
     if (this.ended) { h.close(); return; }
     this.handle = h;
     this.clock.reset();
+    this.distinct.reset();
     this.stopLoop = this.subscribe(video, (now, meta) => this.frame(video, now, meta));
   }
 
@@ -40,27 +40,11 @@ export class HandSession {
     const t = this.clock.time(now, meta);
     // Only DISTINCT camera frames may become samples: a repeated frame (requestAnimationFrame fires at the display rate, e.g. 60 Hz
     // for a 15 fps camera) would fake a high sample rate and could alias a fast movement to a low frequency.
-    const media = typeof meta?.mediaTime === 'number' && Number.isFinite(meta.mediaTime) ? meta.mediaTime : null;
-    const prevMedia = this.lastMedia;
-    if (media !== null) {
-      this.lastMedia = media;
-      if (prevMedia !== null && media !== prevMedia) this.mediaAdvanced = true;
-    }
-    if (t === null) return;
-    if (this.mediaAdvanced && media === prevMedia) return;
-    let counted: number | null = null;
-    if (!this.mediaAdvanced) {
-      const q = (video as { getVideoPlaybackQuality?: () => { totalVideoFrames: number } }).getVideoPlaybackQuality?.();
-      counted = q && Number.isFinite(q.totalVideoFrames) && q.totalVideoFrames > 0 ? q.totalVideoFrames : null;
-      if (counted !== null) {
-        if (counted === this.lastCounted) return;
-        this.lastCounted = counted;
-      }
-    }
-    const signal = this.mediaAdvanced || counted !== null;
+    const verdict = this.distinct.check(video, meta, t);
+    if (verdict === 'skip' || t === null) return;
     let det = null;
     try { det = this.handle.detect(video, now); } catch { /* a failed frame counts as "no hand" */ }
-    if (!signal) {
+    if (verdict === 'unknown') {
       this.timingReliable = false; // last resort: identical landmarks mean the same camera frame again
       if (det && this.lastLm && sameLandmarks(det.lm, this.lastLm)) return;
       this.lastLm = det ? det.lm : null;

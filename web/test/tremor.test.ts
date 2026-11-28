@@ -9,6 +9,7 @@ import { tremorSummary } from '../src/export/tremor';
 import { SessionRecorder } from '../src/export/recorder';
 import { validateSession } from '../src/export/schema';
 import { HandSession } from '../src/capture/handSession';
+import { PauseGroup } from '../src/capture/pauseGroup';
 import { PoseSession } from '../src/capture/poseSession';
 import { FaceHrSession } from '../src/ui/faceHr';
 import {
@@ -326,6 +327,35 @@ describe('hand test and the other models', () => {
     cb(4000); cb(4033); cb(4066);
     expect(faceDetect.mock.calls.length).toBeGreaterThan(before);
     face.end();
+    delete (globalThis as any).document;
+  });
+
+  it('sessions created AFTER the hand test started are held too: no inference or readback per frame until it ends', async () => {
+    const readbacks = vi.fn();
+    const ctx = { drawImage: readbacks, getImageData: readbacks };
+    (globalThis as any).document = { createElement: () => ({ getContext: () => ctx }) };
+    const video = { videoWidth: 640, videoHeight: 480, readyState: 4 } as HTMLVideoElement;
+    const cbs: ((n: number) => void)[] = [];
+    const subscribe = (_v: HTMLVideoElement, c: (n: number) => void) => { cbs.push(c); return () => { cbs.splice(cbs.indexOf(c), 1); }; };
+    const poseDetect = vi.fn(() => null), faceDetect = vi.fn(() => null);
+    const group = new PauseGroup();
+    group.hold(true); // the hand test starts before the camera has opened
+    const pose = new PoseSession(subscribe, { onView: () => {}, onEvent: () => {} }, () => ({ size: () => ({ w: 1, h: 1 }), shiftAndAdvance: () => 'first' as const, reset: () => {} }) as any);
+    const face = new FaceHrSession(subscribe, { onUpdate: () => {}, onOutline: () => {} } as any);
+    group.add(pose); group.add(face);
+    await pose.load(async () => ({ detect: poseDetect, close: () => {} }) as any, video);
+    await face.load(async () => ({ detect: faceDetect, close: () => {}, delegate: 'x' }) as any, video);
+    for (let i = 0; i < 20; i++) cbs.forEach((c) => c(1000 + i * 33));
+    expect(poseDetect).not.toHaveBeenCalled();
+    expect(faceDetect).not.toHaveBeenCalled();
+    expect(readbacks).not.toHaveBeenCalled();
+    pose.restart(); // a stream swap must not un-hold either
+    for (let i = 0; i < 20; i++) cbs.forEach((c) => c(2000 + i * 33));
+    expect(poseDetect).not.toHaveBeenCalled();
+    group.hold(false);
+    for (let i = 0; i < 20; i++) cbs.forEach((c) => c(3000 + i * 33));
+    expect(poseDetect.mock.calls.length + faceDetect.mock.calls.length).toBeGreaterThan(0);
+    pose.end(); face.end();
     delete (globalThis as any).document;
   });
 
