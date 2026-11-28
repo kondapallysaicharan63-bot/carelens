@@ -15,6 +15,7 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 | `roi_trace_hr` | `fps`, `green[]` (face-ROI mean green per frame), `brightness` (ROI mean, number or per-frame list), `motion` (body-sizes/s, number or list), `truth_bpm` | Per frame at `t=i/fps`: if `motion > still_motion` or brightness outside `[min_brightness, max_brightness]` reset the window and skip; else push `green`. Emit window estimates as `HeartRateEstimator`. |
 | `chest_trace_breathing` | `fps`, `chest_y_px[]` (cumulative chest vertical displacement per frame), `truth_breaths_per_min` | Push each sample; emit estimates as `BreathingRateEstimator`. |
 | `ppg_contact` | `t[]` (s), `r[]`, `g[]`, `b[]` (mean of the central ROI per frame, 0-255), `clip_frac[]` (fraction of ROI pixels with R >= 250), `truth_bpm` (inputs rounded to 4 dp) | Feed frames one by one to `ContactPPG.update(t, r, g, b, clip_frac)`; collect each non-null output (one per `contact_ppg.step_s`). Design and gates: `carelens/ppg.py` docstring. |
+| `face_rppg` | `t[]`, `roi_rgb[]` (mean [R,G,B] over the skin ROI, `null` = no face), `roi_px[]`, `face_motion[]` (eye spans/s), `brightness[]`, optional `skin_frac[]` (share of ROI pixels kept by the skin filter, default 1), `truth_bpm`, `skin` | Feed frames to `FaceRPPG.update(t, roi_rgb, roi_px, face_motion, brightness)`; collect each non-null output. Design and gates: `carelens/rppg.py` docstring. |
 | `landmarks` | `fps`, `aspect`, `landmark_indices` (MediaPipe indices), `landmarks[frame][k] = [x, y, visibility]` (x normalised by width, y by height; unlisted landmarks are visibility 0.2; `null` = no person), optional `config` overrides | `FeatureExtractor` -> `FallDetector` + `InactivityDetector`, no tracker. |
 
 ## Expected outputs
@@ -29,6 +30,7 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
   Quality = 0.5 q_snr + 0.3 q_agree + 0.2 q_pi, each in [0, 1]: q_snr rises linearly in dB from `min_snr` (0)
   to `q_snr_full_db` (1); q_agree = 1 - |bpm_spectral - bpm_ibi| / `agree_bpm`; q_pi is a trapezoid, 0 at `pi_min`,
   1 on [`q_pi_full_lo`, `q_pi_full_hi`], 0 at `pi_max`.
+- `face_rppg` fixtures: `expected.updates[] = {t, bpm, bpm_chrom, quality, reported, reason, snr, track_epoch}`; `reason` is one of `ok`, `no_face`, `too_small`, `motion`, `lighting`, `settling`, `low_signal`, `disagree`, `gaps`. Compare count, `t`, `bpm`/`bpm_chrom` (0.3 bpm), `quality` (0.03), `snr`, and **`reported` and `reason` exactly**.
 - `landmarks` fixtures: `expected.events[] = {kind, t_onset, t_confirmed, trigger}` (compare count,
   kind, times within `event_time_s`) and `expected.features_1hz[]` (one entry per second:
   posture, torso angle, motion).
@@ -43,3 +45,5 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 `ppg_clean_{60,90,150}bpm`, `ppg_jitter_drops` (+-8 ms jitter, 5 % dropped frames, 0.3 s hiccup),
 `ppg_motion_burst` (25-31 s: `no_finger`/`settling`, then `ok`), `ppg_saturation` (20-32 s: `saturated`),
 `ppg_finger_lift` (20-28 s: `no_finger`), `ppg_harmonic_trap` (2nd harmonic stronger than the fundamental).
+
+`rppg_clean_{light_72,medium_90,dark_60}bpm` (synthetic skin-tone profiles, a documented approximation, not evidence about people), `rppg_motion_burst`, `rppg_lighting_step`, `rppg_face_lost`, `rppg_small_face`, `rppg_skin_filter`, `rppg_disagree_flicker` (POS vs CHROM disagree: withheld).

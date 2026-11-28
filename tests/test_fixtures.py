@@ -112,7 +112,7 @@ def test_fixtures_use_real_vitals_code_paths():
     src = inspect.getsource(fx)
     assert "_push" not in src and "_maybe_estimate" not in src and "_reset" not in src
     d = json.loads((fx.FIXTURE_DIR / "hr_green_72bpm.json").read_text())
-    inp, hr = d["input"], vitals.HeartRateEstimator()
+    inp, hr = d["input"], vitals.HeartRateEstimator(method="green")
     # direct call of the pure window function on the last window equals the fixture's last estimate
     last = d["expected"]["estimates"][-1]
     n = len(inp["green"])

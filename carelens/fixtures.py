@@ -24,6 +24,7 @@ from .events import FallDetector, InactivityDetector
 from .features import FeatureExtractor
 from .params import PARAMS
 from .ppg import run_contact_ppg, synth_trace
+from .rppg import run_face_rppg, synth_face_trace
 from .synth import ASPECT, Scenario, Segment
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
@@ -56,7 +57,7 @@ def _round(x):
 
 def run_hr_trace(inp: dict) -> dict:
     """Green-channel HR at ROI-trace level, via HeartRateEstimator.update_roi (the pipeline path)."""
-    est = HeartRateEstimator()
+    est = HeartRateEstimator(method="green")
     fps, n = inp["fps"], len(inp["green"])
     bright, motion = inp["brightness"], inp["motion"]
     for i in range(n):
@@ -112,12 +113,15 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "chest_trace_breathing": run_breathing_trace,
     "landmarks": run_landmarks,
     "ppg_contact": run_contact_ppg,
+    "face_rppg": run_face_rppg,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
               "estimate_count": "exact"}
 TOL_PPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01,
            "reported": "exact", "reason": "exact", "update_count": "exact"}
+TOL_RPPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
+            "reported": "exact", "reason": "exact", "update_count": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -179,6 +183,18 @@ def _ppg(name, desc, dur=40.0, bpm=72.0, seed=0, **kw):
     return _fixture(name, desc, "ppg_contact", inp, TOL_PPG)
 
 
+def _rppg(name, desc, dur=32.0, bpm=72.0, seed=0, skin="medium", **kw):
+    kw.setdefault("noise", 0.03)
+    tr = synth_face_trace(dur, bpm, skin=skin, seed=seed, **kw)
+    inp = {"t": [round(v, 4) for v in tr["t"]],
+           "roi_rgb": [None if r is None else [round(c, 3) for c in r] for r in tr["roi_rgb"]],
+           "roi_px": tr["roi_px"], "face_motion": [round(v, 3) for v in tr["face_motion"]],
+           "brightness": [round(v, 2) for v in tr["brightness"]], "truth_bpm": bpm, "skin": skin}
+    if min(tr["skin_frac"]) < 1.0:
+        inp["skin_frac"] = [round(v, 3) for v in tr["skin_frac"]]
+    return _fixture(name, desc, "face_rppg", inp, TOL_RPPG)
+
+
 def generate_all() -> dict[str, str]:
     fx = [
         _hr("hr_green_60bpm", 60, 11, "Green-channel ROI mean, 60 bpm, noise."),
@@ -218,6 +234,28 @@ def generate_all() -> dict[str, str]:
              55, 72, 107, events=[(20.0, 28.0, "lift")]),
         _ppg("ppg_harmonic_trap", "52 bpm with a 2nd harmonic nearly as strong as the fundamental: fundamental wins.",
              40, 52, 52, harmonic=0.5, amp=2.0),
+        _rppg("rppg_clean_light_72bpm", "Face-ROI mean RGB (30 fps), synthetic light-skin profile, 72 bpm, clean.",
+              32, 72, 201, "light"),
+        _rppg("rppg_clean_medium_90bpm", "Synthetic medium-skin profile, 90 bpm, clean.", 32, 90, 202, "medium"),
+        _rppg("rppg_clean_dark_60bpm",
+              "Synthetic dark-skin profile (weaker pulse, darker DC), 60 bpm: lower SNR, some windows withheld.",
+              32, 60, 203, "dark"),
+        _rppg("rppg_motion_burst",
+              "78 bpm; face motion + strong intensity noise 20-23 s: motion gate, then ok again once the window clears.",
+              50, 78, 204, "medium", events=[(20.0, 23.0, "motion", 0.02)]),
+        _rppg("rppg_lighting_step",
+              "84 bpm; the light halves at 20 s: lighting, then settling and ok at the new level.",
+              45, 84, 205, "light", events=[(20.0, 99.0, "lightstep", 0.5)]),
+        _rppg("rppg_face_lost", "72 bpm; face out of view 18-24 s: no_face, then settling and ok.",
+              45, 72, 206, "medium", events=[(18.0, 24.0, "noface")]),
+        _rppg("rppg_small_face", "72 bpm; face too far away (tiny ROI) 15-20 s: too_small, then settling and ok.",
+              38, 72, 207, "light", events=[(15.0, 20.0, "small")]),
+        _rppg("rppg_skin_filter",
+              "72 bpm; the skin filter rejects ~95 % of the ROI 15-20 s (e.g. strongly coloured light): skin_filter, then settling and ok.",
+              38, 72, 209, "light", events=[(15.0, 20.0, "skinless")]),
+        _rppg("rppg_disagree_flicker",
+              "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
+              32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
     ]
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
@@ -227,7 +265,7 @@ def generate_all() -> dict[str, str]:
 
 _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": "event_time_s",
              "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
-             "bpm": "bpm", "bpm_ibi": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi"}
+             "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi"}
 _TOL_DEFAULTS = {"bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
                  "torso_angle_deg": 0.05, "motion": 0.01}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)

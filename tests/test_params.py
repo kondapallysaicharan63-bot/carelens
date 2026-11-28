@@ -45,7 +45,9 @@ def test_module_defaults_equal_params():
     from carelens.vitals import BreathingRateEstimator, HeartRateEstimator
 
     P = PARAMS
-    hr, br = HeartRateEstimator(), BreathingRateEstimator()
+    hr, br = HeartRateEstimator(method="green"), BreathingRateEstimator()
+    pos = HeartRateEstimator()   # W2: POS is the default method; its window/step come from params.rppg
+    assert pos.method == "pos" and (pos.window_s, pos.step_s) == (P.rppg.window_s, P.rppg.step_s)
     assert (hr.window_s, hr.step_s, hr.lo, hr.hi) == (
         P.vitals.heart_rate.window_s, P.vitals.heart_rate.step_s,
         P.vitals.heart_rate.band_lo_hz, P.vitals.heart_rate.band_hi_hz)

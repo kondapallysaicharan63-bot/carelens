@@ -1,7 +1,7 @@
 """Synthetic test video with known ground truth: no real person is filmed.
 
 A simple figure walks, sits, falls and lies still. Its face patch carries a
-green-channel pulse at a known heart rate, and its shirt texture moves up and
+pulsatile skin colour (POS skin-model vector, strongest in green) at a known heart rate, and its shirt texture moves up and
 down at a known breathing rate. Matching pose landmarks are returned through
 ScriptedPose, because MediaPipe cannot see a stick figure. That means these tests
 check the event and signal-processing logic. Pose accuracy has to be checked on
@@ -133,7 +133,7 @@ def _shirt_texture(rng, size=220):
 
 
 def render(scn: Scenario, path: str | Path, fps: float = 15.0, br_amp_px: float = 1.6,
-           hr_amp: float = 0.8, light: float = 1.0, seed: int = 1) -> Path:
+           hr_amp: float = 0.8, light: float = 1.0, seed: int = 1, noise_sd: float = 4.0) -> Path:
     rng = np.random.default_rng(seed)
     path = Path(path)
     vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
@@ -166,16 +166,22 @@ def render(scn: Scenario, path: str | Path, fps: float = 15.0, br_amp_px: float 
             for a, b in [(P.L_HIP, P.L_KNEE), (P.L_KNEE, P.L_ANKLE), (P.R_HIP, P.R_KNEE),
                          (P.R_KNEE, P.R_ANKLE)]:
                 cv2.line(img, px(a), px(b), (60, 60, 140), 14, cv2.LINE_AA)
-            # face: skin ellipse, green channel pulses at the heart rate
+            # face: skin ellipse whose colour pulses at the heart rate
             nose = np.array(px(P.NOSE)); eyes = (np.array(px(P.L_EYE)) + np.array(px(P.R_EYE))) / 2
             fc = tuple(((nose + eyes) / 2).astype(int))
             pulse = hr_amp * np.sin(2 * np.pi * scn.hr_hz * t)
-            skin = (110.0, 150.0 + pulse, 205.0)
+            # BGR skin colour; the pulsatile colour vector is roughly proportional to the POS-paper skin
+            # model [0.33, 0.77, 0.53] (relative R, G, B modulation), blood-volume negative-going. The green
+            # amplitude (hr_amp levels) is unchanged, so the green-only estimator sees the same signal.
+            rel = pulse / 150.0
+            skin = (110.0 * (1.0 - rel * 0.53 / 0.77), 150.0 * (1.0 - rel), 205.0 * (1.0 - rel * 0.33 / 0.77))
             cv2.ellipse(img, fc, (30, 38), 0, 0, 360, skin, -1, cv2.LINE_AA)
-            cv2.circle(img, px(P.L_EYE), 3, (40, 40, 40), -1)
-            cv2.circle(img, px(P.R_EYE), 3, (40, 40, 40), -1)
+            # eyes sit just above the landmark so the pose-derived face ROI (which starts just below the eye
+            # line) holds skin only; otherwise one pixel of ROI-edge jitter swaps dark eye pixels in and out
+            for k in (P.L_EYE, P.R_EYE):
+                cv2.circle(img, (px(k)[0], px(k)[1] - 4), 2, (40, 40, 40), -1)
         f = img.astype(np.float32) * light * (1 + 0.01 * np.sin(2 * np.pi * 0.03 * t))
-        f += rng.normal(0, 4, f.shape)
+        f += rng.normal(0, noise_sd, f.shape)   # per-pixel sensor noise (levels)
         vw.write(np.clip(f, 0, 255).astype(np.uint8))
     vw.release()
     return path

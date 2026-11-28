@@ -25,13 +25,14 @@ describe('shared/params.json', () => {
     ]) {
       expect(params, `missing section ${k}`).toHaveProperty(k);
     }
-    expect(Object.keys(params.vitals).sort()).toEqual(['breathing', 'heart_rate', 'roi', 'signal']);
+    expect(Object.keys(params.vitals).sort()).toEqual(['breathing', 'heart_rate', 'pipeline_min_roi_px', 'roi', 'signal']);
     expect(Object.keys(params.events).sort()).toEqual(['fall', 'gait', 'inactivity', 'timeline']);
   });
 
   it('marks upcoming sections reserved with the planned values', () => {
     expect(params.contact_ppg.reserved).toBeUndefined(); // W1: live
-    for (const k of ['rppg', 'breathing_signal', 'tremor', 'audio']) {
+    expect(params.rppg.reserved).toBeUndefined(); // W2: live
+    for (const k of ['breathing_signal', 'tremor', 'audio']) {
       expect(params[k].reserved).toBe(true);
     }
     expect([params.contact_ppg.band_lo_hz, params.contact_ppg.band_hi_hz]).toEqual([0.7, 3]);

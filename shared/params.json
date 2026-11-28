@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -42,6 +42,7 @@
       "band_lo_hz": 0.1,
       "band_hi_hz": 0.5
     },
+    "pipeline_min_roi_px": 60,
     "roi": {
       "min_landmark_visibility": 0.5,
       "min_box_px": 4,
@@ -137,9 +138,47 @@
     "q_w_pi": 0.2
   },
   "rppg": {
-    "reserved": true,
+    "window_s": 12.0,
+    "step_s": 1.0,
+    "fs_hz": 30.0,
+    "max_gap_s": 0.5,
+    "min_rate_hz": 10.0,
     "band_lo_hz": 0.7,
     "band_hi_hz": 3.0,
+    "taper_stop_lo_hz": 0.5,
+    "taper_stop_hi_hz": 3.5,
+    "zero_pad_factor": 4,
+    "snr_halfwidth_hz": 0.12,
+    "harm_halfwidth_hz": 0.12,
+    "harm_w2": 0.5,
+    "harm_w3": 0.33,
+    "pos_window_s": 1.6,
+    "min_roi_px": 300,
+    "min_skin_frac": 0.25,
+    "motion_max": 0.5,
+    "motion_frac_max": 0.03,
+    "min_brightness": 40.0,
+    "max_brightness": 230.0,
+    "max_brightness_rate": 0.15,
+    "brightness_lag_s": 1.0,
+    "lighting_hold_s": 2.0,
+    "settle_s": 5.0,
+    "min_snr": 2.5,
+    "agree_bpm": 5.0,
+    "q_snr_full_db": 12.0,
+    "q_w_snr": 0.5,
+    "q_w_agree": 0.3,
+    "q_w_motion": 0.2,
+    "skin_filter": true,
+    "skin_cr_min": 133,
+    "skin_cr_max": 173,
+    "skin_cb_min": 77,
+    "skin_cb_max": 127,
+    "roi_landmarks": {
+      "forehead": [103, 67, 109, 10, 338, 297, 332, 333, 337, 9, 108, 104],
+      "left_cheek": [116, 117, 118, 119, 100, 36, 206, 205, 187, 123],
+      "right_cheek": [345, 346, 347, 348, 329, 266, 426, 425, 411, 352]
+    },
     "methods": ["POS", "CHROM"]
   },
   "breathing_signal": {

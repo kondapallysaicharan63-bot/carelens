@@ -4,6 +4,7 @@
 // Not a medical device.
 
 import { runContactPpg } from './ppg';
+import { runFaceRppg } from './rppg';
 
 export interface Fixture {
   name: string;
@@ -19,6 +20,8 @@ export type Implementation = (fx: Fixture, params: any) => any;
 
 const ppgContact: Implementation = (fx, params) => runContactPpg(fx.input, params.contact_ppg);
 
+const faceRppg: Implementation = (fx, params) => runFaceRppg(fx.input, params.rppg);
+
 export const IMPLEMENTATIONS: Record<string, Implementation> = {
   ppg_clean_60bpm: ppgContact,
   ppg_clean_90bpm: ppgContact,
@@ -28,13 +31,22 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   ppg_saturation: ppgContact,
   ppg_finger_lift: ppgContact,
   ppg_harmonic_trap: ppgContact,
+  rppg_clean_light_72bpm: faceRppg,
+  rppg_clean_medium_90bpm: faceRppg,
+  rppg_clean_dark_60bpm: faceRppg,
+  rppg_motion_burst: faceRppg,
+  rppg_lighting_step: faceRppg,
+  rppg_face_lost: faceRppg,
+  rppg_small_face: faceRppg,
+  rppg_skin_filter: faceRppg,
+  rppg_disagree_flicker: faceRppg,
 };
 
 const TOL_KEYS: Record<string, [string, number]> = {
   value: ['value_bpm', 0.5], quality: ['quality', 0.05], t: ['t_s', 0.05],
   t_onset: ['event_time_s', 0.1], t_confirmed: ['event_time_s', 0.1],
   torso_angle_deg: ['torso_angle_deg', 0.05], motion: ['motion', 0.01],
-  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01],
+  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01],
 };
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 

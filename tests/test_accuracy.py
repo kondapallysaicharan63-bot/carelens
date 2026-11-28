@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from carelens import accuracy as acc
+from carelens.params import PARAMS
 from carelens.pipeline import Config, run
 from carelens.store import Store
 from carelens.synth import Scenario, Segment, render
@@ -248,7 +249,7 @@ def test_pipeline_records_window_s(tmp_path):
     scn = Scenario([Segment("still", 3, posture="sit")], hr_bpm=72)
     render(scn, tmp_path / "s.mp4")
     r = run(tmp_path / "s.mp4", scn.provider(), tmp_path, Config(), clip_name="s")
-    assert r["heart_rate"]["window_s"] == 15.0 and r["breathing_rate"]["window_s"] == 30.0
+    assert r["heart_rate"]["window_s"] == PARAMS.rppg.window_s and r["breathing_rate"]["window_s"] == 30.0
 
 
 def test_suggest_offset_large_reference_fast_and_small():
@@ -357,3 +358,13 @@ def test_streaming_parse_memory_flat(tmp_path):
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
     assert len(v) == 100_000 and peak < 40e6
+
+
+def test_alignment_prefers_recorded_span_and_legacy_default_is_15():
+    ref_t = np.array([T0_TS + 100.0])
+    ref_v = np.array([60.0])
+    short = _w(106, 61); short["span_s"] = 12.0      # centre 100 (a 12 s span)
+    legacy = _w(106, 61)                                # no span_s: falls back to window_s
+    assert acc.align([short], T0_TS, ref_t, ref_v, tolerance_s=1, window_s=30)[0]["ref"] == 60.0
+    assert acc.align([legacy], T0_TS, ref_t, ref_v, tolerance_s=1, window_s=30)[0]["ref"] is None
+    assert acc._DEFAULT_WINDOW_S["heart_rate"] == 15.0

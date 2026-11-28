@@ -1,4 +1,4 @@
-"""Contactless heart rate (rPPG, green channel) and breathing rate (chest motion).
+"""Contactless heart rate (rPPG: POS on the face ROI's mean RGB, or the green channel) and breathing rate.
 
 Both estimators only report when the person is still and the region is well lit,
 and every estimate carries a quality score in [0, 1]. These are wellness trends,
@@ -15,6 +15,7 @@ from scipy import signal
 
 from . import pose as P
 from .params import PARAMS
+from .rppg import FaceRPPG
 
 _V = PARAMS.vitals
 _SIG = _V.signal
@@ -156,15 +157,34 @@ class _WindowEstimator:
 
 
 class HeartRateEstimator(_WindowEstimator):
-    """rPPG: mean green value of a face skin patch, band-passed 0.7-3 Hz (42-180 bpm)."""
+    """rPPG heart rate from the pose-derived face patch.
 
-    def __init__(self, window_s=_V.heart_rate.window_s, step_s=_V.heart_rate.step_s,
+    ``method="pos"`` (default): the patch's mean RGB goes through the W2 pipeline (``carelens.rppg``: POS with
+    a CHROM cross-check, window/step/gates from ``params.rppg``), so it is robust to common-mode intensity
+    changes. ``method="green"``: the original mean-green band-pass + Welch estimate (window/step from
+    ``params.vitals.heart_rate``), kept as the baseline and as the trace-level path used by the ``hr_green_*``
+    fixtures. Both gate on pose motion (``still_motion``) and on brightness [min_brightness, max_brightness]."""
+
+    def __init__(self, window_s=None, step_s=None,
                  min_quality=_COMMON.min_quality, still_motion=_COMMON.still_motion_bodysizes_s,
                  min_brightness=_V.heart_rate.min_brightness,
-                 max_brightness=_V.heart_rate.max_brightness):
+                 max_brightness=_V.heart_rate.max_brightness, method: str = "pos"):
+        if method not in ("pos", "green"):
+            raise ValueError("method must be 'pos' or 'green'")
+        self.method = method
+        if window_s is None:
+            window_s = PARAMS.rppg.window_s if method == "pos" else _V.heart_rate.window_s
+        if step_s is None:
+            step_s = PARAMS.rppg.step_s if method == "pos" else _V.heart_rate.step_s
         super().__init__(window_s, step_s, _V.heart_rate.band_lo_hz, _V.heart_rate.band_hi_hz,
                          min_quality, still_motion, True)
         self.min_b, self.max_b = min_brightness, max_brightness
+        # the pipeline's face patch is in native pixels (not the web's <=160 px canvas): its own size gate
+        self._face = FaceRPPG(PARAMS.rppg.model_copy(update={"min_roi_px": _V.pipeline_min_roi_px}))
+
+    def _reset(self):
+        super()._reset()
+        self._face.reset()
 
     def update(self, t, image, state):
         if not state.present or state.motion > self.still_motion:
@@ -174,11 +194,30 @@ class HeartRateEstimator(_WindowEstimator):
             self._reset(); return None
         x0, y0, x1, y1 = roi
         patch = image[y0:y1, x0:x1]
-        return self.update_roi(t, float(patch[:, :, 1].mean()),   # green channel (BGR index 1)
-                               float(patch.mean()), state.motion)
+        if self.method == "green":
+            return self.update_roi(t, float(patch[:, :, 1].mean()),   # green channel (BGR index 1)
+                                   float(patch.mean()), state.motion)
+        return self.update_rgb(t, patch.reshape(-1, 3).mean(axis=0)[::-1].tolist(),   # BGR -> RGB
+                               patch.shape[0] * patch.shape[1], float(patch.mean()), state.motion)
+
+    def update_rgb(self, t, rgb, roi_px, brightness, motion):
+        """ROI-level step for the POS method: pose gating, then ``FaceRPPG``. ``motion`` (body sizes/s) is passed
+        on as face_motion rescaled so that the pose gate ``still_motion`` equals ``rppg.motion_max`` (it feeds the
+        quality term). Appends an estimate whenever a window was analysed (with its ``span_s``)."""
+        if motion > self.still_motion or not (self.min_b <= brightness <= self.max_b):
+            self._reset(); return None
+        fm = motion / self.still_motion * PARAMS.rppg.motion_max if self.still_motion > 0 else 0.0
+        u = self._face.update(t, rgb, roi_px, fm, brightness)
+        if u is None or u["bpm"] is None:
+            return None
+        est = {"t": round(t, 2), "value": round(u["bpm"], 1), "quality": round(u["quality"], 3),
+               "reported": bool(u["reported"] and u["quality"] >= self.min_quality),
+               "brightness": round(brightness, 1), "span_s": round(u["span_s"], 2)}
+        self.estimates.append(est)
+        return est
 
     def update_roi(self, t, green, brightness, motion):
-        """ROI-level step (after face ROI extraction): gating, then push + window estimate."""
+        """Green-channel ROI-level step (after face ROI extraction): gating, then push + window estimate."""
         if motion > self.still_motion or not (self.min_b <= brightness <= self.max_b):
             self._reset(); return None
         self._push(t, green)

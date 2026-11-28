@@ -68,6 +68,7 @@ class Roi(_M):
 
 
 class Vitals(_M):
+    pipeline_min_roi_px: int   # Python pipeline's face-patch size gate (native pixels; ~3 m subject at 640x480)
     signal: Signal
     heart_rate: HeartRate
     breathing: Breathing
@@ -208,8 +209,92 @@ class ContactPpg(_M):
         return self
 
 
-class Rppg(BandReserved):
+def rppg_errors(p: dict) -> List[str]:
+    """Consistency checks for ``rppg`` (mirrored by rppgErrors in web/src/core/rppg.ts)."""
+    e: List[str] = []
+    if not 0 < p["taper_stop_lo_hz"] < p["band_lo_hz"] < p["band_hi_hz"] < p["taper_stop_hi_hz"] < p["fs_hz"] / 2:
+        e.append("need 0 < taper_stop_lo < band_lo < band_hi < taper_stop_hi < Nyquist")
+    if min(p["q_w_snr"], p["q_w_agree"], p["q_w_motion"]) < 0 or abs(p["q_w_snr"] + p["q_w_agree"] + p["q_w_motion"] - 1.0) > 1e-9:
+        e.append("quality weights must be >= 0 and sum to 1")
+    if not (p["min_snr"] > 0 and p["q_snr_full_db"] > 10.0 * math.log10(max(p["min_snr"], 1e-300))):
+        e.append("need min_snr > 0 and q_snr_full_db above the gate in dB")
+    for k in ("window_s", "step_s", "fs_hz", "max_gap_s", "min_rate_hz", "settle_s", "agree_bpm", "snr_halfwidth_hz",
+              "harm_halfwidth_hz", "pos_window_s", "min_roi_px", "motion_max", "max_brightness_rate",
+              "brightness_lag_s", "lighting_hold_s"):
+        if not p[k] > 0:
+            e.append(f"{k} must be > 0")
+    if p["zero_pad_factor"] < 1:
+        e.append("zero_pad_factor must be >= 1")
+    if p["harm_w2"] < 0 or p["harm_w3"] < 0:
+        e.append("harm weights must be >= 0")
+    if not 8 <= p["pos_window_s"] * p["fs_hz"] <= 0.5 * p["window_s"] * p["fs_hz"]:
+        e.append("need 8 samples <= pos_window_s*fs_hz <= half of window_s*fs_hz")
+    if not 0 <= p["min_skin_frac"] <= 1:
+        e.append("need 0 <= min_skin_frac <= 1")
+    if not 0 <= p["motion_frac_max"] < 1:
+        e.append("need 0 <= motion_frac_max < 1")
+    if not 0 <= p["min_brightness"] < p["max_brightness"] <= 255:
+        e.append("need 0 <= min_brightness < max_brightness <= 255")
+    if not (0 <= p["skin_cr_min"] < p["skin_cr_max"] <= 255 and 0 <= p["skin_cb_min"] < p["skin_cb_max"] <= 255):
+        e.append("need 0 <= skin_c*_min < skin_c*_max <= 255")
+    for name, idx in p["roi_landmarks"].items():
+        if len(idx) < 3 or len(set(idx)) != len(idx) or min(idx) < 0 or max(idx) > 477:
+            e.append(f"roi_landmarks.{name}: need >= 3 distinct indices in 0..477")
+    return e
+
+
+class RoiLandmarks(_M):
+    forehead: List[int]
+    left_cheek: List[int]
+    right_cheek: List[int]
+
+
+class Rppg(_M):
+    window_s: float
+    step_s: float
+    fs_hz: float
+    max_gap_s: float
+    min_rate_hz: float
+    band_lo_hz: float
+    band_hi_hz: float
+    taper_stop_lo_hz: float
+    taper_stop_hi_hz: float
+    zero_pad_factor: int
+    snr_halfwidth_hz: float
+    harm_halfwidth_hz: float
+    harm_w2: float
+    harm_w3: float
+    pos_window_s: float
+    min_roi_px: int
+    min_skin_frac: float
+    motion_max: float
+    motion_frac_max: float
+    min_brightness: float
+    max_brightness: float
+    max_brightness_rate: float
+    brightness_lag_s: float
+    lighting_hold_s: float
+    settle_s: float
+    min_snr: float
+    agree_bpm: float
+    q_snr_full_db: float
+    q_w_snr: float
+    q_w_agree: float
+    q_w_motion: float
+    skin_filter: bool
+    skin_cr_min: int
+    skin_cr_max: int
+    skin_cb_min: int
+    skin_cb_max: int
+    roi_landmarks: RoiLandmarks
     methods: List[str]
+
+    @model_validator(mode="after")
+    def _check(self) -> "Rppg":
+        errs = rppg_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
 
 
 class Audio(_Reserved):

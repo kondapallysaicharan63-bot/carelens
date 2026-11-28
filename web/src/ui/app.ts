@@ -3,10 +3,12 @@ import { describeMediaError, listDevices, nextDeviceId, setTorch, supportsTorch,
 import { onVideoFrame } from '../capture/frames';
 import { PresenceSession } from '../capture/presence';
 import { createPoseSmoke } from '../capture/pose';
+import { createFaceLandmarker } from '../capture/face';
 import { openStreamWithFallback, stopStream } from '../capture/session';
 import { safeGet, safeRemove, safeSet } from '../storage';
 import { makeCard, TIER1, TIER2, type Card } from './cards';
 import { buildFingertipView, FingertipSession } from './fingertip';
+import { buildFaceCard, FaceHrSession, type FaceCard } from './faceHr';
 import { qualityMeter } from './quality';
 import { Consent, DISCLAIMER } from './consent';
 import { el } from './dom';
@@ -20,6 +22,7 @@ export function mountApp(root: HTMLElement): void {
   let stream: MediaStream | null = null;
   let choice: CaptureChoice = {};
   let presenceSession: PresenceSession | null = null;
+  let faceSession: FaceHrSession | null = null;
   let fingertipSession: FingertipSession | null = null;
   let mode: Mode = 'standard';
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
@@ -134,12 +137,12 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(presence?: Card): HTMLElement {
+  function resultsSections(presence?: Card, face?: FaceCard): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
     grid.append(presence ? presence.root : makeCard('Person in view', 1, 'Starts when the camera is on.').root);
-    for (const [t, n] of TIER1) grid.append(makeCard(t, 1, n).root);
+    for (const [t, n] of TIER1) grid.append(t === 'Heart rate (face)' && face ? face.root : makeCard(t, 1, n).root);
     r.append(grid);
     const e = el('section', { class: 'results experimental', 'aria-labelledby': 'h-exp' }, el('h2', { id: 'h-exp' }, 'Experimental'), el('p', { class: 'sub' }, 'Tier 2: early, less reliable features. Treat as curiosity, not information.'));
     const g2 = el('div', { class: 'grid' });
@@ -154,6 +157,8 @@ export function mountApp(root: HTMLElement): void {
     gen++;
     presenceSession?.end();
     presenceSession = null;
+    faceSession?.end();
+    faceSession = null;
     fingertipSession?.end();
     fingertipSession = null;
     stopStream(stream);
@@ -187,9 +192,10 @@ export function mountApp(root: HTMLElement): void {
     controls.append(el('div', { class: 'btnrow' }, torchBtn, nextBtn, stopBtn));
 
     const live = el('section', { class: 'panel live' }, el('h2', {}, 'Live'), status, warn);
-    if (consent.state.camera) live.append(el('div', { class: 'preview' }, video));
+    const face = consent.state.camera ? buildFaceCard(qualityMeter) : undefined;
+    if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(presence), notOffered);
+    main.replaceChildren(live, resultsSections(presence, face), notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
@@ -241,7 +247,8 @@ export function mountApp(root: HTMLElement): void {
       } else {
         status.textContent = 'Microphone on (no camera).';
       }
-      presenceSession?.restart(); // re-bind the frame loop to the (new) stream
+      presenceSession?.restart(); // re-bind the frame loops to the (new) stream
+      faceSession?.restart();
       return true;
     };
 
@@ -283,9 +290,17 @@ export function mountApp(root: HTMLElement): void {
     if (!(await openWith(choice))) return;
     if (!consent.state.camera) return;
 
-    // MediaPipe smoke path (off the critical path: throttled, async init).
+    // Face heart rate: FaceLandmarker on every frame (front camera is the default in standard mode).
     if (g !== gen) return;
-    const session = new PresenceSession(onVideoFrame, (yes) => presence.setValue(yes ? 'Person in view: yes' : 'Person in view: no', null));
+    const fsession = new FaceHrSession(onVideoFrame, face!.hooks);
+    faceSession = fsession;
+    const faceLoad = fsession.load(createFaceLandmarker, video).then(
+      () => { if (!fsession.isEnded) face!.setStatus('Face the camera'); },
+      (err) => { if (!fsession.isEnded) face!.setStatus('Face model failed to load: ' + (err instanceof Error ? err.message : String(err))); },
+    );
+
+    // MediaPipe pose smoke path (off the critical path: throttled to ~5 Hz so the face loop keeps the frame budget).
+    const session = new PresenceSession(onVideoFrame, (yes) => presence.setValue(yes ? 'Person in view: yes' : 'Person in view: no', null), 200);
     presenceSession = session;
     try {
       await session.load(createPoseSmoke, video);
@@ -293,6 +308,7 @@ export function mountApp(root: HTMLElement): void {
     } catch (err) {
       if (!session.isEnded) presence.setValue('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
     }
+    await faceLoad;
   }
 
   /** Fingertip heart-rate mode: back camera, torch on when supported, ROI frame loop -> core. */

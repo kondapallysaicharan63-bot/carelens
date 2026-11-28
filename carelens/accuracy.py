@@ -45,7 +45,7 @@ import numpy as np
 
 HR_TYPE = "HKQuantityTypeIdentifierHeartRate"
 MAX_ROWS = 200
-_DEFAULT_WINDOW_S = {"heart_rate": 15.0, "breathing_rate": 30.0}   # vitals.py estimator defaults
+_DEFAULT_WINDOW_S = {"heart_rate": 15.0, "breathing_rate": 30.0}   # legacy results without window_s (HR was the 15 s green estimator); new runs record window_s
 BOOT_N, BOOT_SEED = 2000, 12345
 
 
@@ -164,10 +164,11 @@ def _tz_from(s: str) -> timezone:
 # ---------------------------------------------------------------- alignment & stats
 def align(windows: list[dict], start_ts: float, ref_t: np.ndarray, ref_v: np.ndarray,
           tolerance_s: float = 30.0, offset_s: float = 0.0, window_s: float = 0.0) -> list[dict]:
-    """Match each window (centre = t - window_s/2) with reference samples within +-tolerance_s."""
+    """Match each window (centre = t - span/2, span = the window's own ``span_s`` when recorded, else window_s)
+    with reference samples within +-tolerance_s."""
     rows = []
     for w in windows:
-        wall = start_ts + w["t"] - window_s / 2.0 + offset_s
+        wall = start_ts + w["t"] - float(w.get("span_s") or window_s) / 2.0 + offset_s
         i0 = int(np.searchsorted(ref_t, wall - tolerance_s, side="left"))
         i1 = int(np.searchsorted(ref_t, wall + tolerance_s, side="right"))
         seg = ref_v[i0:i1]
@@ -232,7 +233,7 @@ def suggest_offset(windows, start_ts, ref_t, tolerance_s, span=600, step=30,
     nearest reference sample). Reported only, never applied. ref_t must be sorted."""
     if not windows or not len(ref_t):
         return None
-    wt = np.array([start_ts + w["t"] - window_s / 2.0 for w in windows])
+    wt = np.array([start_ts + w["t"] - float(w.get("span_s") or window_s) / 2.0 for w in windows])
     margin = span + tolerance_s
     ref = ref_t[int(np.searchsorted(ref_t, wt.min() - margin, "left")):
                 int(np.searchsorted(ref_t, wt.max() + margin, "right"))]
