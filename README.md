@@ -1,3 +1,92 @@
+# CareLens web (main track)
+
+CareLens runs as a **static website that works entirely on your device**: it uses your phone or
+laptop camera and microphone to show wellbeing *trends* (heart rate, breathing, presence, and
+experimental extras). The Python/Jetson pipeline further down is the reference implementation and
+a later, optional edge track (see `docs/10-WEB-PLAN.md`). Status: **W0a scaffold** (consent flow,
+device picker, shell UI, live preview, MediaPipe pose smoke test). Measurements come in W1+.
+
+> **Not a medical device. For demonstration and wellbeing trends only. Do not use for diagnosis or
+> emergencies; call emergency services if you feel unwell.**
+
+## Run locally
+
+```bash
+cd web
+npm ci
+npm run fetch-models   # downloads models into web/public/models with pinned SHA-256 checks
+npm run dev            # HTTPS dev server; prints Local and Network (LAN) https URLs
+npm test               # unit tests (Vitest)
+npm run typecheck
+npm run build          # static site -> web/dist/ (also copies MediaPipe wasm into the bundle)
+npm run preview        # serve web/dist over HTTPS on the LAN
+```
+
+**Phone on the same Wi-Fi:** run `npm run dev` (or `npm run preview`), open the `Network:` https URL
+on the phone. Browsers only allow camera/microphone on HTTPS (or localhost). The dev certificate is
+self-signed (`@vitejs/plugin-basic-ssl`), so accept the warning once. For a trusted certificate,
+install [mkcert](https://github.com/FiloSottile/mkcert), run `mkcert -install` and
+`mkcert localhost <your-LAN-IP>`, and point Vite at the files via `server.https` in
+`web/vite.config.ts` (drop the basic-ssl plugin). Some laptops expose a black webcam as the first
+device; the app detects black frames and offers the next camera.
+
+## Deploy
+
+The build output is fully static: build command `npm run build` (run in `web/`), output directory
+`web/dist`. Run `npm run fetch-models` first on the build machine (models are not committed).
+
+- **GitHub Pages** (served under `/carelens/`): `CARELENS_BASE=/carelens/ npm run build`, publish `web/dist`.
+- **Cloudflare Pages:** root directory `web`, build `npm ci && npm run fetch-models && npm run build`, output `dist` (base `/`).
+- **Netlify:** base directory `web`, build command as above, publish directory `web/dist` (base `/`).
+
+`CARELENS_BASE` sets the Vite `base` (default `/`). Static hosts serve `.wasm` as `application/wasm`.
+
+## Tiers
+
+- **Results (Tier 1):** features meant to be reasonably dependable, each with a signal-quality meter
+  (weak / ok / good, shown as text and shape, not colour alone). Below the quality gate no number is shown.
+- **Experimental (Tier 2):** early features, clearly labelled, less reliable; treat as curiosity.
+- **Not offered** (explained in the app): SpO2, blood pressure, glucose, temperature, any disease or
+  diagnosis, emotion/mental-health scores, stroke/facial-asymmetry screening, age or identity.
+
+## Nothing leaves your device
+
+No uploads, accounts or analytics. This is enforced, not just promised: `web/index.html` carries a
+Content-Security-Policy with `default-src 'self'` and `connect-src 'self'`, so the page cannot send
+data to any other origin, and all models and wasm are self-hosted (nothing loads from a CDN).
+Nothing is stored by default; only your theme and last-chosen device IDs are remembered in
+`localStorage`. CSP details: `script-src 'self' 'wasm-unsafe-eval'` is required because MediaPipe
+compiles WebAssembly (verified: without it the pose model fails to initialise; `'unsafe-eval'` is
+not needed). `worker-src 'self' blob:` is kept for the upcoming Web Worker/AudioWorklet code (not
+needed by the pose smoke test). Styles are external, so no `'unsafe-inline'` in production (dev
+server only, for Vite's HMR). A test checks the built `index.html` for the CSP and external URLs.
+
+## Licences of everything we ship or build with
+
+| Component | Use | Licence |
+|---|---|---|
+| MediaPipe Tasks Vision `@mediapipe/tasks-vision` 1.2.3 (+ wasm) | pose (now), face/hand (later) | Apache-2.0 |
+| MediaPipe Tasks Audio `@mediapipe/tasks-audio` 1.2.3 (+ wasm) | sound events (later) | Apache-2.0 |
+| `pose_landmarker_lite.task`, `face_landmarker.task`, `hand_landmarker.task` | MediaPipe model bundles | Apache-2.0 |
+| `yamnet.tflite` (audio_classifier/yamnet/float32/1) | sound-event classifier | Apache-2.0 |
+| Vite 7 / Vitest 5 | build / unit tests | MIT |
+| TypeScript 7, `@types/node` | typecheck | Apache-2.0 / MIT |
+| `@vitejs/plugin-basic-ssl` | local HTTPS dev | MIT |
+| Playwright (external, not a dependency yet) | browser end-to-end checks | Apache-2.0 |
+| MediaPipe Pose (Python), OpenCV, NumPy, SciPy | Python reference pipeline | Apache-2.0 / Apache-2.0 / BSD / BSD |
+| Planned: vosk-browser + small English model | optional "help" keyword (off by default) | Apache-2.0 |
+| **Excluded:** Ultralytics YOLO (AGPL-3.0), any GPL code | | |
+
+npm licences in `web/package-lock.json`: MIT, Apache-2.0, plus two build-time-only packages that
+Vite's PostCSS pulls in: `picocolors` (ISC) and `source-map-js` (BSD-3-Clause). Both are dev
+dependencies (`npm ls --omit=dev` is empty) and are not in the shipped bundle. The only third-party
+code in the shipped JS is `@mediapipe/tasks-vision` (Apache-2.0, bundled at build time), plus the
+self-hosted MediaPipe wasm and model files. Only the wasm files MediaPipe actually requests are
+copied into `dist` (`*_wasm_internal.{js,wasm}`). Model files are
+fetched by `npm run fetch-models` and verified against pinned SHA-256 checksums.
+
+---
+
 # CareLens
 
 A fall-and-inactivity monitor plus contactless heart-rate and breathing-rate

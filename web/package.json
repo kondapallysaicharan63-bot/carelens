@@ -1,0 +1,25 @@
+{
+  "name": "carelens-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CareLens web: on-device wellbeing trends in the browser. Not a medical device.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/prepare-wasm.mjs && vite --host",
+    "preview": "vite preview --host",
+    "build": "node scripts/prepare-wasm.mjs && tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fetch-models": "node scripts/fetch-models.mjs"
+  },
+  "devDependencies": {
+    "@mediapipe/tasks-audio": "^1.2.3",
+    "@mediapipe/tasks-vision": "^1.2.3",
+    "@types/node": "^22.20.7",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.8",
+    "vitest": "^5.1.2"
+  }
+}
