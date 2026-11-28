@@ -78,7 +78,7 @@ def _committed():
 def test_committed_files_present_small_and_schema():
     files = _committed()
     assert len(files) >= 12
-    assert sum(p.stat().st_size for p in files) < 3_000_000
+    assert sum(p.stat().st_size for p in files) < 3_600_000   # W7 mobility fixtures (~1 MB of synthetic landmark tracks) raised this from 3.0 MB
     for p in files:
         d = json.loads(p.read_text())
         assert set(d) == {"name", "description", "input_level", "params_version", "input",
@@ -159,3 +159,20 @@ def test_breathing_band_is_shared_and_wide():
     assert (PARAMS.breathing_signal.band_lo_hz, PARAMS.breathing_signal.band_hi_hz) == (0.1, 0.7)
     assert PARAMS.scheduling.pose_hz == 8.0
     assert PARAMS.scheduling.inactivity_demo_default_s in PARAMS.scheduling.inactivity_demo_options_s
+
+
+def test_tolerances_are_scoped_to_their_fixture_family():
+    cough = json.loads((fx.FIXTURE_DIR / "audio_cough_single.json").read_text())
+    ev = json.loads(json.dumps(cough["expected"]))
+    ev["events"][0]["t_start"] += 0.08                      # an 80 ms cough-onset shift must fail
+    assert fx.compare_outputs(cough, ev)
+    hrv = json.loads((fx.FIXTURE_DIR / "hrv_clean_30ms.json").read_text())
+    h = json.loads(json.dumps(hrv["expected"]))
+    h["hrv"]["duration_s"] += 0.08                                  # HRV durations keep their tight comparison too
+    assert fx.compare_outputs(hrv, h)
+    mob = json.loads((fx.FIXTURE_DIR / "mobility_sts_5x.json").read_text())
+    m = json.loads(json.dumps(mob["expected"]))
+    m["time_s"] += 0.08                                      # mobility times allow 0.1 s
+    assert fx.compare_outputs(mob, m) == []
+    m["time_s"] += 0.08
+    assert fx.compare_outputs(mob, m)

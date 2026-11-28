@@ -33,7 +33,7 @@ describe('session schema validator', () => {
     expect(schema.$defs.event.properties.kind.enum).toEqual([...EVENT_KINDS]);
     expect(schema.properties.modes.items.enum).toEqual([...MODES]);
     expect(schema.$defs.summary.properties.kind.enum).toEqual([...SUMMARY_KINDS]);
-    expect(Object.keys(schema.$defs.summary.properties).sort()).toEqual(['duration_s', 'kept_frac', 'kind', 'mean_hr_bpm', 'n_beats', 'n_kept', 'reason', 'reported', 'rmssd_ms', 'sdnn_ms', 't', 'wall']);
+    expect(Object.keys(schema.$defs.summary.properties).sort()).toEqual(['cadence_spm', 'duration_s', 'kept_frac', 'kind', 'mean_hr_bpm', 'n_beats', 'n_kept', 'phases_s', 'quality', 'reason', 'rep_times_s', 'reported', 'reps', 'rmssd_ms', 'sdnn_ms', 'speed_m_s', 't', 'time_s', 'wall']);
     expect(schema.properties.device.properties.user_agent_family.enum).toEqual([...UA_FAMILIES]);
   });
   const bad: [string, (s: any) => void, string][] = [

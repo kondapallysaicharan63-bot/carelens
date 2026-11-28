@@ -26,6 +26,7 @@ import { SessionRecorder } from '../export/recorder';
 import type { Mode as RecMode } from '../export/schema';
 import { BreathCameraLogger } from '../export/breathCamera';
 import { CoughRecorder } from '../export/cough';
+import { buildMovementTests, MOVEMENT_PARAMS, MOVEMENT_NOTE, type MovementTests } from './movementTests';
 
 type Theme = 'auto' | 'light' | 'dark';
 type Mode = 'standard' | 'fingertip';
@@ -39,6 +40,7 @@ export function mountApp(root: HTMLElement): void {
   let fingertipSession: FingertipSession | null = null;
   let audioSession: AudioSession | null = null;
   let audioCards: AudioCards | null = null;
+  let movementTests: MovementTests | null = null;
   let mode: Mode = 'standard';
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
   let stdCamera = consent.state.camera;
@@ -161,7 +163,7 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null): HTMLElement {
+  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
@@ -178,7 +180,11 @@ export function mountApp(root: HTMLElement): void {
     r.append(grid);
     const e = el('section', { class: 'results experimental', 'aria-labelledby': 'h-exp' }, el('h2', { id: 'h-exp' }, 'Experimental'), el('p', { class: 'sub' }, 'Tier 2: early, less reliable features. Treat as curiosity, not information.'));
     const g2 = el('div', { class: 'grid' });
-    for (const [t, n] of TIER2) g2.append(t === 'Heart-rate variability' ? makeCard(t, 2, HRV_NOTE, HRV_OFF_TEXT).root : makeCard(t, 2, n).root);
+    for (const [t, n] of TIER2) {
+      if (t === 'Heart-rate variability') g2.append(makeCard(t, 2, HRV_NOTE, HRV_OFF_TEXT).root);
+      else if (t === 'Sit-to-stand and walking speed') g2.append(movement ? movement.root : makeCard('Movement tests', 2, MOVEMENT_NOTE, 'Starts when the camera is on.').root);
+      else g2.append(makeCard(t, 2, n).root);
+    }
     e.append(g2);
     wrap.append(r, e);
     return wrap;
@@ -196,6 +202,8 @@ export function mountApp(root: HTMLElement): void {
     audioSession?.end();
     audioSession = null;
     audioCards = null;
+    movementTests?.disable('The camera is off, so movement tests cannot run. Start the camera to try one.');
+    movementTests = null;
     if (recorder) void dataPanel.sessionEnded(recorder);
     stopStream(stream);
     stream = null;
@@ -205,6 +213,8 @@ export function mountApp(root: HTMLElement): void {
     const g = ++gen;
     const rec = startRecorder([...(consent.state.camera ? ['camera' as const] : []), ...(consent.state.mic ? ['microphone' as const] : [])]);
     const pose = consent.state.camera ? buildPoseCards(qualityMeter) : undefined;
+    const movement = pose ? buildMovementTests({ mp: MOVEMENT_PARAMS, record: (row) => void rec.addMobilitySummary(row), heightSaving: () => dataPanel.savingEnabled() }) : undefined;
+    movementTests = movement ?? null;
     if (pose) {
       const h = pose.hooks;
       const brLog = new BreathCameraLogger(rec, params.vitals.breathing.step_s);
@@ -213,6 +223,7 @@ export function mountApp(root: HTMLElement): void {
         onView(v) {
           h.onView(v);
           brLog.onView(v);
+          movement?.onView(v);
         },
         onEvent(e) {
           h.onEvent(e);
@@ -275,7 +286,7 @@ export function mountApp(root: HTMLElement): void {
     if (pose) live.append(pose.banner);
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face, audio), dataPanel.root, notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio, movement), dataPanel.root, notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
@@ -395,7 +406,10 @@ export function mountApp(root: HTMLElement): void {
       await session.load(loader, video);
       if (!session.isEnded) pose!.setStatus('Looking for you…');
     } catch (err) {
-      if (!session.isEnded) pose!.setStatus('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
+      if (!session.isEnded) {
+        pose!.setStatus('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
+        movement?.disable('The pose model failed to load, so movement tests cannot run.');
+      }
     }
     await faceLoad;
   }

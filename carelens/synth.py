@@ -124,6 +124,213 @@ class Scenario:
         return cls(segs, hr_bpm=truth["hr_bpm"], br_bpm=truth["br_bpm"])
 
 
+# ---------------------------------------------------------------- side-on mobility scripts (W7)
+# A side-on figure for the chair-stand / TUG / walking tests (synthetic only). Thigh = shank = LEG; the ankles are fixed on
+# the ground line while the hip rises from the chair (knee 90 deg) to standing (knee ~169 deg) by inverse kinematics.
+# Nose-to-ankle is 0.652 frame heights at scale 1, i.e. 0.87 of a 1.65 m person: 1 frame-height unit = M_PER_U / scale metres.
+
+LEG, GROUND, TORSO = 0.20, 0.90, 0.217
+M_PER_U = 0.87 * 1.65 / 0.652
+
+
+def _prog_geometry(prog: float):
+    dy = 0.20 + 0.198 * prog
+    dx = 0.20 * (1.0 - prog)
+    return dx, dy
+
+
+def side_knee_deg(prog: float) -> float:
+    """Knee angle of the side-on figure at sit->stand progress ``prog`` (0 seated .. 1 standing, both legs straight down)."""
+    dx, dy = _prog_geometry(prog)
+    return float(np.degrees(2 * np.arcsin(min(1.0, np.hypot(dx, dy) / (2 * LEG)))))
+
+
+def _side_skeleton(prog: float, fx: float, facing: int = 1, scale: float = 1.0, gait: float = 0.0, stride: float = 0.0,
+                   turn: float = 0.0) -> np.ndarray:
+    """33x3 landmarks (frame-height units) of the side-on figure. ``fx`` = ankle-centre x, ``gait`` stride phase (rad) with
+    ankle swing ``stride`` (frame heights), ``turn`` 0..1 rotates the shoulders towards the camera."""
+    lm = np.zeros((P.N_LANDMARKS, 3), np.float32)
+    lm[:, 2] = 0.2
+    dx, dy = _prog_geometry(prog)
+    hip = np.array([-dx, -dy])
+    sw = np.sin(gait)
+    pts = {}
+    for side, (hk, kk, ak) in {1: (P.L_HIP, P.L_KNEE, P.L_ANKLE), -1: (P.R_HIP, P.R_KNEE, P.R_ANKLE)}.items():
+        ank = np.array([side * stride * sw, 0.0])
+        v = ank - hip
+        d = float(np.hypot(*v))
+        mid = (hip + ank) / 2
+        hgt = np.sqrt(max(LEG ** 2 - (d / 2) ** 2, 0.0))
+        knee = mid + np.array([v[1], -v[0]]) / d * hgt
+        pts[hk] = (hip[0] + side * 0.008, hip[1])
+        pts[kk] = tuple(knee)
+        pts[ak] = tuple(ank)
+    lean = np.radians(18.0 * (1.0 - prog))
+    sh = hip + np.array([np.sin(lean) * TORSO, -np.cos(lean) * TORSO])
+    half = (0.012 + 0.07 * turn) / 2
+    pts[P.L_SHOULDER] = (sh[0] + half, sh[1])
+    pts[P.R_SHOULDER] = (sh[0] - half, sh[1])
+    pts[P.NOSE] = (sh[0] + 0.03, sh[1] - 0.037)
+    for k, (px, py) in pts.items():
+        lm[k] = (fx + facing * px * scale, GROUND + py * scale, 0.95)
+    return lm
+
+
+def smoothstep(u):
+    u = np.clip(u, 0.0, 1.0)
+    return u * u * (3 - 2 * u)
+
+
+def _interp_knots(t: float, knots) -> float:
+    """Value at t of (time, value) knots, smoothstep between successive knots."""
+    if t <= knots[0][0]:
+        return knots[0][1]
+    for (ta, va), (tb, vb) in zip(knots, knots[1:]):
+        if t < tb:
+            return va + (vb - va) * float(smoothstep((t - ta) / (tb - ta)))
+    return knots[-1][1]
+
+
+class SideScript:
+    """Time functions of the side-on figure: ``prog(t)``, ``x(t)`` (ankle-centre), ``facing(t)``, ``turn(t)``, ``speed(t)`` (m/s,
+    drives the stride), plus an optional ``scale(t)``. ``frames`` samples them with landmark jitter and dropouts."""
+
+    def __init__(self, duration, prog, x, facing=lambda t: 1, turn=lambda t: 0.0, speed=lambda t: 0.0,
+                 scale=lambda t: 0.6, stride_hz=0.9, jitter=0.0008, seed=0):
+        self.duration, self.prog, self.x, self.facing, self.turn = duration, prog, x, facing, turn
+        self.speed, self.scale, self.stride_hz, self.jitter = speed, scale, stride_hz, jitter
+        self.rng = np.random.default_rng(seed)
+        self._gait_t = np.linspace(0, duration, int(duration * 200) + 1)
+        rate = np.array([min(1.0, abs(speed(t)) / 0.3) for t in self._gait_t])
+        self._gait = np.concatenate([[0.0], np.cumsum((rate[1:] + rate[:-1]) / 2 * np.diff(self._gait_t))]) * 2 * np.pi * stride_hz
+
+    def landmarks_hu(self, t: float) -> np.ndarray:
+        sc = self.scale(t)
+        amp = 0.05 * min(1.0, abs(self.speed(t)) / 0.8)
+        gait = float(np.interp(t, self._gait_t, self._gait))
+        return _side_skeleton(self.prog(t), self.x(t), self.facing(t), sc, gait, amp, self.turn(t))
+
+    def frames(self, fps: float = 15.0, dropouts=()):
+        """(times, normalised landmarks or None) for a camera of aspect ASPECT, like ``Scenario.pose_landmarks``."""
+        ts, out = [], []
+        for i in range(int(self.duration * fps)):
+            t = i / fps
+            lm = self.landmarks_hu(t)
+            lm[:, :2] += self.rng.normal(0, self.jitter, (P.N_LANDMARKS, 2))
+            lm[:, 0] /= ASPECT
+            ts.append(t)
+            out.append(None if any(a <= t < b for a, b in dropouts) else lm)
+        return ts, out
+
+
+def _chair_knots(n_reps: int, partial_after=(), t0: float = 2.0, cycle: float = 2.0, rise: float = 0.5, hold: float = 0.35,
+                 descend: float = 0.5, peak_partial: float = 0.9, first_delay: float = 0.0):
+    """prog knots: seated until t0 (+first_delay); then ``n_reps`` full cycles (rise, hold standing, descend, seated for the
+    rest of ``cycle``) with a partial rise (to ``peak_partial``, no stand) after each rep index in ``partial_after``."""
+    knots, t = [(0.0, 0.0), (t0 + first_delay, 0.0)], t0 + first_delay
+    rest = cycle - rise - hold - descend
+    for r in range(n_reps):
+        for peak, h in ((1.0, hold),) + (((peak_partial, 0.0),) if r in partial_after else ()):
+            knots += [(t + rise, peak), (t + rise + h, peak), (t + rise + h + descend, 0.0)]
+            t += rise + h + descend
+            knots += [(t + rest, 0.0)]
+            t += rest
+    return knots, t
+
+
+def chair_stand_script(n_reps: int, partial_after=(), cycle: float = 2.0, t0: float = 2.0, duration: float = 36.0, **kw) -> tuple[SideScript, list]:
+    """Chair stand: seated lead-in until ``t0`` ('Go'), then ``n_reps`` full reps (plus partial rises after the listed rep
+    indices), seated afterwards. The figure faces +x, ankles at x = 0.55."""
+    knots, _ = _chair_knots(n_reps, partial_after, t0=t0, cycle=cycle, **{k: v for k, v in kw.items() if k in ("rise", "hold", "descend", "peak_partial", "first_delay")})
+    return SideScript(duration, lambda t: _interp_knots(t, knots), lambda t: 0.55,
+                      jitter=kw.get("jitter", 0.0008), seed=kw.get("seed", 0)), knots
+
+
+def _speed_profile(segs, x0: float, m_per_u: float):
+    """Piecewise-linear speed knots [(t, v m/s)] -> (speed(t), x(t)) with x integrated analytically (x in frame heights)."""
+    ts = [s[0] for s in segs]
+    vs = [s[1] for s in segs]
+    xs = [x0]
+    for i in range(1, len(ts)):
+        xs.append(xs[-1] + 0.5 * (vs[i] + vs[i - 1]) * (ts[i] - ts[i - 1]) / m_per_u)
+
+    def speed(t):
+        return float(np.interp(t, ts, vs))
+
+    def x(t):
+        if t <= ts[0]:
+            return x0
+        if t >= ts[-1]:
+            return xs[-1]
+        i = int(np.searchsorted(ts, t, side="right")) - 1
+        dt = t - ts[i]
+        slope = (vs[i + 1] - vs[i]) / (ts[i + 1] - ts[i])
+        return xs[i] + (vs[i] * dt + 0.5 * slope * dt * dt) / m_per_u
+    return speed, x
+
+
+def tug_script(distance_m: float = 3.0, speed: float = 1.0, t0: float = 2.0, reaction: float = 0.5, rise: float = 1.2,
+               pivot: float = 1.0, descend: float = 1.2, ramp: float = 0.5, tail: float = 2.0, scale: float = 0.6,
+               return_trip: bool = True, sit_at_end: bool = True, jitter: float = 0.0008, seed: int = 0):
+    """TUG: seated until ``t0`` (Go), rise, walk ``distance_m`` out, pivot, walk back, pivot, sit. Returns (script, events)
+    where events holds the scripted times: go, rise_start, rise_end, turn1 (pivot window), turn2, sit_start, sit_end.
+    ``return_trip`` False: no walk back (sits down at the far end). ``sit_at_end`` False: stays standing at the chair."""
+    m_per_u = M_PER_U / scale
+    tr = t0 + reaction
+    t_rise_end = tr + rise
+    walk_t = distance_m / speed + ramp
+    seg = [(0.0, 0.0), (t_rise_end, 0.0), (t_rise_end + ramp, speed), (t_rise_end + walk_t - ramp, speed), (t_rise_end + walk_t, 0.0)]
+    t_p1 = t_rise_end + walk_t
+    ev = {"go": t0, "rise_start": tr, "rise_end": t_rise_end}
+    t_end_walk = t_p1
+    if return_trip:
+        t_p1e = t_p1 + pivot
+        seg += [(t_p1e, 0.0), (t_p1e + ramp, -speed), (t_p1e + walk_t - ramp, -speed), (t_p1e + walk_t, 0.0)]
+        ev["turn1"] = (t_p1, t_p1e)
+        t_p2 = t_p1e + walk_t
+        t_p2e = t_p2 + pivot
+        ev["turn2"] = (t_p2, t_p2e)
+        t_end_walk = t_p2e
+    else:
+        t_p2e = t_p1 + 0.5
+    ev["sit_start"] = t_p2e
+    ev["sit_end"] = t_p2e + descend
+    duration = t_p2e + descend + tail
+    seg.append((duration, 0.0))
+    spd, x = _speed_profile(seg, 0.30, m_per_u)
+    knots = [(0.0, 0.0), (tr, 0.0), (t_rise_end, 1.0), (t_end_walk, 1.0)]
+    if sit_at_end:
+        knots += [(t_p2e, 1.0), (t_p2e + descend, 0.0), (duration, 0.0)]
+    else:
+        knots += [(duration, 1.0)]
+    t_flip = t_p1 + pivot / 2
+
+    def facing(t):
+        return 1 if (not return_trip or t < t_flip) else -1
+
+    def turn(t):
+        for a, b in (ev.get("turn1"), ev.get("turn2")) if return_trip else ((t_p1, t_p1 + 0.5),):
+            if a <= t < b:
+                return float(np.sin(np.pi * (t - a) / (b - a)))
+        return 0.0
+    return SideScript(duration, lambda t: _interp_knots(t, knots), x, facing, turn, spd, scale=lambda t: scale,
+                      jitter=jitter, seed=seed), ev, knots
+
+
+def walk_script(speed: float, seconds: float = 6.0, scale: float = 0.6, x0: float = 0.1, lead: float = 0.0, jitter: float = 0.0008, seed: int = 0,
+                tail: float = 0.0) -> SideScript:
+    """Side-on walk to the right at constant ``speed`` m/s (after a standing ``lead``, before a standing ``tail``)."""
+    m_per_u = M_PER_U / scale
+    spd, x = _speed_profile([(0.0, 0.0), (lead, 0.0), (lead + 1e-3, speed), (lead + seconds, speed), (lead + seconds + 1e-3, 0.0), (lead + seconds + tail + 1e-3, 0.0)], x0, m_per_u)
+    return SideScript(lead + seconds + tail, lambda t: 1.0, x, speed=spd, scale=lambda t: scale, jitter=jitter, seed=seed)
+
+
+def approach_script(seconds: float = 5.0, drift_u: float = 0.0, s0: float = 0.45, s1: float = 0.9, jitter: float = 0.0008, seed: int = 0) -> SideScript:
+    """Walks towards the camera: apparent size grows s0 -> s1 while the hip drifts ``drift_u`` frame heights sideways."""
+    return SideScript(seconds, lambda t: 1.0, lambda t: 0.45 + drift_u * t / seconds, speed=lambda t: 1.0,
+                      scale=lambda t: s0 + (s1 - s0) * t / seconds, jitter=jitter, seed=seed)
+
+
 def _shirt_texture(rng, size=220):
     tex = np.full((size, size, 3), (150, 90, 60), np.uint8)
     for y in range(0, size, 9):

@@ -7,6 +7,7 @@ import { runContactPpg } from './ppg';
 import { runHrv } from './hrv';
 import { runFaceRppg } from './rppg';
 import { runPoseFixture } from './pipeline';
+import { runMobilityFixture } from './mobility';
 import { BreathingRateEstimator } from './breathing';
 import { runAudioEnvelope, runBreathEnv, runLabelEvents } from './audio';
 
@@ -33,6 +34,8 @@ const audioEnvelope: Implementation = (fx, params) => runAudioEnvelope(fx.input,
 const breathEnv: Implementation = (fx, params) => runBreathEnv(fx.input, params.audio);
 
 const labelEvents: Implementation = (fx, params) => runLabelEvents(fx.input, params.audio);
+
+const mobility: Implementation = (fx, params) => runMobilityFixture(fx.input, params);
 
 const landmarks: Implementation = (fx, params) => runPoseFixture(fx.input, params, false);
 
@@ -95,6 +98,18 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   audio_cough_borderline_hysteresis: labelEvents,
   audio_cough_sustained_noise: labelEvents,
   audio_cough_speech_only: labelEvents,
+  mobility_chair_stand_8: mobility,
+  mobility_chair_stand_12: mobility,
+  mobility_chair_stand_15: mobility,
+  mobility_chair_stand_dropouts: mobility,
+  mobility_sts_5x: mobility,
+  mobility_tug: mobility,
+  mobility_tug_no_turn: mobility,
+  mobility_walk_0p6: mobility,
+  mobility_walk_1p0: mobility,
+  mobility_walk_1p4: mobility,
+  mobility_walk_crossing_3s: mobility,
+  mobility_walk_toward_camera: mobility,
 };
 
 const TOL_KEYS: Record<string, [string, number]> = {
@@ -103,6 +118,11 @@ const TOL_KEYS: Record<string, [string, number]> = {
   torso_angle_deg: ['torso_angle_deg', 0.05], motion: ['motion', 0.01],
   bpm: ['bpm', 0.3], rmssd_ms: ['hrv_ms', 0.5], sdnn_ms: ['hrv_ms', 0.5], mean_hr_bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01], envelope: ['env_log10', 1e-4],
 };
+/** mobility fixtures only (scoped by input_level so cough onsets, HRV durations etc. keep their exact comparison) */
+const MOB_TOL_KEYS: Record<string, [string, number]> = {
+  quality: ['quality', 0.05], time_s: ['mob_time_s', 0.1], rep_times_s: ['mob_time_s', 0.1], rise: ['mob_time_s', 0.1], walk_out: ['mob_time_s', 0.1], turn_1: ['mob_time_s', 0.1], walk_back: ['mob_time_s', 0.1], turn_2: ['mob_time_s', 0.1], sit: ['mob_time_s', 0.1], t_start: ['mob_time_s', 0.1], duration_s: ['mob_time_s', 0.1],
+  speed_m_s: ['speed_m_s', 0.02], distance_m: ['distance_m', 0.1], cadence_spm: ['cadence_spm', 1],
+};
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 
 /** Same semantics as carelens.fixtures.compare_outputs: numbers within tolerance by field name;
@@ -110,7 +130,7 @@ const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 export function compareOutputs(fx: Fixture, actual: any, expected: any = fx.expected): string[] {
   const errs: string[] = [];
   const tolFor = (field: string): number => {
-    const e = TOL_KEYS[field];
+    const e = (fx.input_level === 'mobility' ? MOB_TOL_KEYS : TOL_KEYS)[field];
     if (!e) return TOL_OTHER;
     const v = fx.tolerance[e[0]];
     return typeof v === 'number' ? v : e[1];

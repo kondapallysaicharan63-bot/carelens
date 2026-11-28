@@ -30,6 +30,8 @@ from .hrv import run_hrv, synth_rr, truth_hrv, with_ectopics, without_beats
 from .ppg import run_contact_ppg, synth_trace
 from .rppg import run_face_rppg, synth_face_trace
 from .synth import ASPECT, Scenario, Segment
+from . import synth as SY
+from .mobility import MOBILITY_INDICES, run_mobility
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 from . import audio as AU
 
@@ -166,6 +168,7 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "audio_envelope": AU.run_audio_envelope,
     "audio_breath_env": AU.run_breath_env,
     "audio_label_events": AU.run_label_events,
+    "mobility": run_mobility,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
@@ -179,6 +182,9 @@ TOL_AUDIO_ENV = {"env_log10": 1e-4, "reported": "exact"}
 TOL_BREATH_SOUND = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
                     "reported": "exact", "reason": "exact", "update_count": "exact"}
 TOL_AUDIO_EVENTS = {"event_count": "exact", "t_start": "exact", "t_end": "exact", "peak_score": "exact"}
+TOL_MOBILITY = {"mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0, "quality": 0.05,
+                "reported": "exact", "reason": "exact", "reps": "exact", "partial_rises": "exact", "stands": "exact",
+                "n_segments": "exact", "n_not_side_on": "exact", "rep_in_progress": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -372,6 +378,49 @@ def _audio_fixtures() -> list:
     ]
 
 
+def _mob(name, desc, test, script, go_t=None, fps=15.0, dropouts=(), height_m=None):
+    """mobility fixture: a side-on synthetic script rendered to landmarks (3 decimals) -> tracker -> the named test."""
+    ts, frames = script.frames(fps, dropouts)
+    rows = [None if lm is None else np.round(lm[MOBILITY_INDICES], 3).tolist() for lm in frames]
+    inp = {"test": test, "fps": fps, "aspect": ASPECT, "landmark_indices": MOBILITY_INDICES, "landmarks": rows}
+    if go_t is not None:
+        inp["go_t"] = go_t
+    if height_m is not None:
+        inp["height_m"] = height_m
+    return _fixture(name, desc, "mobility", inp, TOL_MOBILITY)
+
+
+def _mobility_fixtures() -> list:
+    out = []
+    for n, cycle, jit, seed in ((8, 2.9, 0.0008, 701), (12, 2.1, 0.002, 702), (15, 1.7, 0.002, 703)):
+        scr, _ = SY.chair_stand_script(n, partial_after=(2, 5), cycle=cycle, t0=1.0, duration=32.0, jitter=jit, seed=seed)
+        out.append(_mob(f"mobility_chair_stand_{n}",
+                        f"30 s chair stand, side-on synthetic figure: {n} full reps plus 2 partial rises (to a 142 deg knee) that "
+                        "must not count; Go at 1 s.", "chair_stand_30s", scr, go_t=1.0))
+    scr, _ = SY.chair_stand_script(12, partial_after=(3, 7), cycle=2.1, t0=1.0, duration=32.0, jitter=0.004, seed=704)
+    out.append(_mob("mobility_chair_stand_dropouts",
+                    "12 reps + 2 partial rises with 4 px-class landmark noise and three 0.3 s pose dropouts bridged by the tracker: "
+                    "still 12 reps, quality below 1.", "chair_stand_30s", scr, go_t=1.0,
+                    dropouts=[(5.0, 5.3), (13.1, 13.4), (20.5, 20.8)]))
+    scr, _ = SY.chair_stand_script(5, cycle=2.4, t0=1.5, duration=16.0, jitter=0.002, seed=705)
+    out.append(_mob("mobility_sts_5x", "Five sit-to-stands, rising 0.5 s before Go (Go at 2 s): the clock starts at the rise onset.",
+                    "sit_to_stand_5x", scr, go_t=2.0))
+    scr, ev, _ = SY.tug_script(jitter=0.002, seed=706)
+    out.append(_mob("mobility_tug", "Timed Up and Go, 3 m each way, side-on: rise, walk, turn, walk back, turn, sit; reported with phases.",
+                    "tug", scr, go_t=ev["go"]))
+    scr, ev, _ = SY.tug_script(return_trip=False, jitter=0.002, seed=707)
+    out.append(_mob("mobility_tug_no_turn", "Walks 3 m away and sits down at the far end: no turn, withheld (no_turn).", "tug", scr, go_t=ev["go"]))
+    for tag, v, secs in (("0p6", 0.6, 6.0), ("1p0", 1.0, 4.0), ("1p4", 1.4, 3.2)):
+        out.append(_mob(f"mobility_walk_{tag}", f"Side-on walk at {v} m/s (1.65 m person), 108 steps/min: speed within 10 %.",
+                        "walking_speed", SY.walk_script(v, secs, lead=1.0, jitter=0.002, seed=710 + int(v * 10)), height_m=1.65))
+    out.append(_mob("mobility_walk_crossing_3s", "Out of view for 2 s, a single 3 s side-on crossing at 1.0 m/s, out of view again: quality is measured over "
+                    "the in-view span only, so the walk is reported.", "walking_speed",
+                    SY.walk_script(1.0, 3.0, lead=2.0, tail=2.0, x0=0.1, jitter=0.002, seed=730), height_m=1.65, dropouts=[(0.0, 2.0), (5.0, 7.0)]))
+    out.append(_mob("mobility_walk_toward_camera", "Walks diagonally towards the camera (apparent height grows 2x): not_side_on, no speed.",
+                    "walking_speed", SY.approach_script(drift_u=0.6, jitter=0.002, seed=720), height_m=1.65))
+    return out
+
+
 def generate_all() -> dict[str, str]:
     fx = [
         _hr("hr_green_60bpm", 60, 11, "Green-channel ROI mean, 60 bpm, noise."),
@@ -468,7 +517,7 @@ def generate_all() -> dict[str, str]:
         _rppg("rppg_disagree_flicker",
               "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
               32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
-    ] + _audio_fixtures()
+    ] + _audio_fixtures() + _mobility_fixtures()
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
 
@@ -479,8 +528,12 @@ _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": 
              "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
              "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "rmssd_ms": "hrv_ms", "sdnn_ms": "hrv_ms", "mean_hr_bpm": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi",
              "envelope": "env_log10"}
+# mobility fixtures only (scoped by input_level so cough onsets, HRV durations etc. keep their exact comparison)
+_MOB_TOL_KEYS = {"time_s": "mob_time_s", "rep_times_s": "mob_time_s", "rise": "mob_time_s", "walk_out": "mob_time_s", "turn_1": "mob_time_s",
+                 "walk_back": "mob_time_s", "turn_2": "mob_time_s", "sit": "mob_time_s", "t_start": "mob_time_s", "duration_s": "mob_time_s",
+                 "speed_m_s": "speed_m_s", "distance_m": "distance_m", "cadence_spm": "cadence_spm", "quality": "quality"}
 _TOL_DEFAULTS = {"hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
-                 "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4}
+                 "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4, "mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 
 
@@ -494,7 +547,7 @@ def compare_outputs(fx: dict, actual, expected=None) -> list[str]:
     errs: list[str] = []
 
     def tol_for(field):
-        key = _TOL_KEYS.get(field)
+        key = (_MOB_TOL_KEYS if fx.get("input_level") == "mobility" else _TOL_KEYS).get(field)
         if key is None:
             return _TOL_OTHER
         v = tol.get(key, _TOL_DEFAULTS[key])

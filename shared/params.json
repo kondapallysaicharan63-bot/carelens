@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -216,6 +216,29 @@
     "reserved": true,
     "band_lo_hz": 3.0,
     "band_hi_hz": 12.0
+  },
+  "mobility": {
+    "min_visibility": 0.5,
+    "leg_vis_margin": 0.1,
+    "min_quality": 0.6,
+    "sit_deg": 115.0,
+    "rise_deg": 125.0,
+    "stand_deg": 155.0,
+    "stand_hip_frac": 0.85,
+    "stand_dwell_s": 0.1,
+    "sit_dwell_s": 0.1,
+    "chair_stand_s": 30.0,
+    "sts_reps": 5,
+    "sts_early_s": 1.0,
+    "sts_max_s": 60.0,
+    "tug_max_s": 90.0,
+    "walk_window_s": 20.0,
+    "tug": { "vel_win_s": 0.5, "turn_speed_frac": 0.35, "min_excursion_bodies": 0.8, "min_return_frac": 0.6 },
+    "walk": {
+      "height_default_m": 1.65, "height_min_m": 1.0, "height_max_m": 2.3, "nose_ankle_frac": 0.87,
+      "min_speed_bodies_s": 0.25, "vel_win_s": 0.5, "gap_s": 0.6, "height_tol_frac": 0.15, "steady_frac": 0.8,
+      "min_dist_m": 2.0, "min_dur_s": 2.0, "min_samples": 5, "cadence_hyst_frac": 0.25, "cadence_min_crossings": 4
+    }
   },
   "audio": {
     "classifier": "YAMNet",

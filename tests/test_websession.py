@@ -234,3 +234,29 @@ def test_cli_argument_errors(tmp_path, capsys):
     (tmp_path / "bad.json").write_text(json.dumps(bad))
     assert acc.main(["--web-session", str(tmp_path / "bad.json"), "--metric", "hr_fingertip", "--hr-ref", str(r), "--out", str(tmp_path / "o")]) == 2
     assert "estimates[0].quality" in capsys.readouterr().err
+
+
+def test_mobility_summaries_validated():
+    base = {"t": 40.0, "wall": "2026-11-20T10:00:40.000-08:00", "reported": True, "reason": "ok"}
+    good = [
+        {"kind": "chair_stand_30s", "reps": 12, "rep_times_s": [2.1, 4.2], "quality": 0.97},
+        {"kind": "sit_to_stand_5x", "time_s": 9.8, "rep_times_s": [2.0] * 5, "quality": 1.0},
+        {"kind": "tug", "time_s": 11.3, "phases_s": {"rise": 1.7, "walk_out": 3.4, "turn_1": 1.3, "walk_back": 3.2, "turn_2": 1.3, "sit": 0.4}},
+        {"kind": "walking_speed", "speed_m_s": 1.02, "cadence_spm": 108.0, "duration_s": 3.7, "quality": 0.9},
+        {"kind": "tug", "reported": False, "reason": "no_turn", "quality": 0.9},   # withheld: no numbers
+    ]
+    for g in good:
+        s = _good()
+        s["summaries"] = [{**base, **g}]
+        assert ws.validate(s) == [], g
+    bad = [
+        {"kind": "chair_stand_30s"},                                  # reported without reps
+        {"kind": "tug", "time_s": -1}, {"kind": "walking_speed"}, {"kind": "sit_to_stand_5x", "time_s": 1, "rep_times_s": [-1]},
+        {"kind": "chair_stand_30s", "reps": 2.5}, {"kind": "walking_speed", "speed_m_s": 1, "cadence_spm": 0},
+        {"kind": "tug", "time_s": 1, "phases_s": {"rise": 1, "flight": 2}}, {"kind": "tug", "time_s": 1, "quality": 2},
+        {"kind": "chair_stand_30s", "reps": 3, "rep_times_s": [1.0] * 101}, {"kind": "tug", "time_s": 1, "height_cm": 170},
+    ]
+    for b in bad:
+        s = _good()
+        s["summaries"] = [{**base, **b}]
+        assert ws.validate(s), b

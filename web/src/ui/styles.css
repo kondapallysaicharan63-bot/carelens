@@ -93,3 +93,10 @@ progress { width: 100%; max-width: 640px; height: 12px; accent-color: var(--acce
 .level-fill { display: block; height: 100%; width: 0; background: var(--accent); }
 .timeline { position: relative; height: 22px; margin: 8px 0 0; border-bottom: 2px solid var(--border); }
 .tick { position: absolute; bottom: 0; width: 3px; height: 18px; background: var(--q-ok); border-radius: 1px; }
+
+/* movement tests (W7) */
+.mv-step { margin: 8px 0; }
+.mv-checks { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 2px; }
+.mv-checks .ok::before { content: "\2713  "; color: var(--accent); }
+.mv-checks .warn::before { content: "\2022  "; }
+.mv-pick .btnrow { flex-wrap: wrap; }

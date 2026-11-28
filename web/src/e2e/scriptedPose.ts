@@ -5,7 +5,8 @@ import type { Landmarks } from '../core/features';
 
 export const E2E_MARKER = 'CARELENS_E2E_SCRIPTED_POSE';
 
-interface Script { fps: number; landmarks: (Landmarks | null)[] }
+/** `holdUntilPlay`: show the first frame until the test sets window.__E2E_PLAY__ (so a timed UI flow can start the motion at Go) */
+interface Script { fps: number; landmarks: (Landmarks | null)[]; holdUntilPlay?: boolean }
 
 export async function createScriptedPose(): Promise<PoseHandle> {
   const script = (window as unknown as { __E2E_POSE__?: Script }).__E2E_POSE__;
@@ -14,6 +15,7 @@ export async function createScriptedPose(): Promise<PoseHandle> {
   return {
     delegate: E2E_MARKER,
     detect(_video, ts) {
+      if (script.holdUntilPlay && !(window as unknown as { __E2E_PLAY__?: boolean }).__E2E_PLAY__) return script.landmarks[0] ?? null;
       t0 ??= ts;
       const i = Math.min(script.landmarks.length - 1, Math.floor(((ts - t0) / 1000) * script.fps));
       return script.landmarks[i] ?? null;

@@ -456,6 +456,89 @@ class Audio(_M):
         return self
 
 
+def mobility_errors(p: dict) -> List[str]:
+    """Consistency checks for ``mobility`` (mirrored by mobilityErrors in web/src/core/mobility.ts)."""
+    e: List[str] = []
+    if not 0 < p["sit_deg"] < p["rise_deg"] < p["stand_deg"] <= 180:
+        e.append("need 0 < sit_deg < rise_deg < stand_deg <= 180")
+    for k in ("min_visibility", "min_quality", "stand_hip_frac"):
+        if not 0 < p[k] <= 1:
+            e.append(f"{k} must be in (0, 1]")
+    if not 0 <= p["leg_vis_margin"] < 1:
+        e.append("leg_vis_margin must be in [0, 1)")
+    for k in ("stand_dwell_s", "sit_dwell_s", "chair_stand_s", "sts_early_s", "sts_max_s", "tug_max_s", "walk_window_s"):
+        if not p[k] > 0:
+            e.append(f"{k} must be > 0")
+    if not 2 <= p["sts_reps"] <= 50:
+        e.append("sts_reps must be in [2, 50]")
+    t, w = p["tug"], p["walk"]
+    if not (t["vel_win_s"] > 0 and 0 < t["turn_speed_frac"] < 1 and t["min_excursion_bodies"] > 0 and 0 < t["min_return_frac"] <= 1):
+        e.append("tug: need vel_win_s > 0, 0 < turn_speed_frac < 1, min_excursion_bodies > 0, 0 < min_return_frac <= 1")
+    if not 0 < w["height_min_m"] <= w["height_default_m"] <= w["height_max_m"]:
+        e.append("walk: need 0 < height_min_m <= height_default_m <= height_max_m")
+    for k in ("nose_ankle_frac", "height_tol_frac", "steady_frac"):
+        if not 0 < w[k] < 1:
+            e.append(f"walk.{k} must be in (0, 1)")
+    for k in ("min_speed_bodies_s", "vel_win_s", "gap_s", "min_dist_m", "min_dur_s", "cadence_hyst_frac"):
+        if not w[k] > 0:
+            e.append(f"walk.{k} must be > 0")
+    if w["min_samples"] < 3 or w["cadence_min_crossings"] < 3:
+        e.append("walk: min_samples and cadence_min_crossings must be >= 3")
+    return e
+
+
+class MobilityTug(_M):
+    vel_win_s: float
+    turn_speed_frac: float
+    min_excursion_bodies: float
+    min_return_frac: float
+
+
+class MobilityWalk(_M):
+    height_default_m: float
+    height_min_m: float
+    height_max_m: float
+    nose_ankle_frac: float
+    min_speed_bodies_s: float
+    vel_win_s: float
+    gap_s: float
+    height_tol_frac: float
+    steady_frac: float
+    min_dist_m: float
+    min_dur_s: float
+    min_samples: int
+    cadence_hyst_frac: float
+    cadence_min_crossings: int
+
+
+class Mobility(_M):
+    """Guided mobility tests from pose landmarks (W7, Experimental). Wellbeing trends only: no norms or cut-offs."""
+    min_visibility: float
+    leg_vis_margin: float
+    min_quality: float
+    sit_deg: float
+    rise_deg: float
+    stand_deg: float
+    stand_hip_frac: float
+    stand_dwell_s: float
+    sit_dwell_s: float
+    chair_stand_s: float
+    sts_reps: int
+    sts_early_s: float
+    sts_max_s: float          # UI time limits: the live test gives up after this long
+    tug_max_s: float
+    walk_window_s: float
+    tug: MobilityTug
+    walk: MobilityWalk
+
+    @model_validator(mode="after")
+    def _check(self) -> "Mobility":
+        errs = mobility_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
 class Params(_M):
     version: int
     description: str
@@ -473,6 +556,7 @@ class Params(_M):
     rppg: Rppg
     breathing_signal: BandReserved
     tremor: BandReserved
+    mobility: Mobility
     audio: Audio
 
 

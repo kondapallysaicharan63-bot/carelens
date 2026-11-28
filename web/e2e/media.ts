@@ -145,9 +145,9 @@ export function writeBreathWav(name = 'breath-15bpm.wav', bpm = 15, seconds = 60
   return path;
 }
 
-/** The fall_sudden landmark fixture expanded to 33 rows per frame (unlisted landmarks: invisible), as the pose provider returns them. */
-export function fallLandmarks(): { fps: number; landmarks: (number[][] | null)[] } {
-  const d = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'fixtures', 'fall_sudden.json'), 'utf8'));
+/** A shared/fixtures landmark fixture expanded to 33 rows per frame (unlisted landmarks: invisible), as the pose provider returns them. */
+export function fixtureLandmarks(name: string): { fps: number; landmarks: (number[][] | null)[] } {
+  const d = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'fixtures', `${name}.json`), 'utf8'));
   const idx: number[] = d.input.landmark_indices;
   const landmarks = (d.input.landmarks as (number[][] | null)[]).map((frame) => {
     if (!frame) return null;
@@ -156,4 +156,13 @@ export function fallLandmarks(): { fps: number; landmarks: (number[][] | null)[]
     return lm;
   });
   return { fps: d.input.fps, landmarks };
+}
+
+/** The fall_sudden landmark fixture (see fixtureLandmarks). */
+export const fallLandmarks = (): { fps: number; landmarks: (number[][] | null)[] } => fixtureLandmarks('fall_sudden');
+
+/** The synthetic 30 s chair-stand fixture (8 full reps + 2 partial rises) and its scripted rep count. */
+export function chairStandScript(): { fps: number; landmarks: (number[][] | null)[]; holdUntilPlay: boolean; reps: number } {
+  const d = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'fixtures', 'mobility_chair_stand_8.json'), 'utf8'));
+  return { ...fixtureLandmarks('mobility_chair_stand_8'), holdUntilPlay: true, reps: d.expected.reps as number };
 }

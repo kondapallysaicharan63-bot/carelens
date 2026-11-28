@@ -38,6 +38,12 @@ The build output is fully static: build command `npm run build` (run in `web/`),
 - **GitHub Pages** (served under `/carelens/`): `CARELENS_BASE=/carelens/ npm run build`, publish `web/dist`.
 - **Cloudflare Pages:** root directory `web`, build `npm ci && npm run fetch-models && npm run build`, output `dist` (base `/`).
 - **Netlify:** base directory `web`, build command as above, publish directory `web/dist` (base `/`).
+- **Vercel:** import the GitHub repo, set **Root Directory = `web`**; `web/vercel.json` supplies the
+  install/build/output settings (fetches the pinned models at build time) and sends the same
+  Content-Security-Policy as a real HTTP header, plus `Permissions-Policy` limiting camera and
+  microphone to this site and `frame-ancestors 'none'`. Vercel serves HTTPS automatically, so phones
+  can use the camera. No environment variables or secrets are needed. Preview deployments are
+  created per branch; promote one to production when you're happy with it.
 
 `CARELENS_BASE` sets the Vite `base` (default `/`). Static hosts serve `.wasm` as `application/wasm`.
 

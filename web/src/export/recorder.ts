@@ -4,6 +4,7 @@
 import params from '../../../shared/params.json';
 import pkg from '../../package.json';
 import { DISCLAIMER } from '../ui/consent';
+import type { MobilitySummaryFields } from './mobility';
 import {
   SCHEMA_VERSION, type EstimateRow, type EventRow, type Metric, type Mode, type SessionExport, type SummaryRow, type UaFamily,
 } from './schema';
@@ -100,6 +101,15 @@ export class SessionRecorder {
     const row: SummaryRow = { t, wall: this.wall(t), kind: s.kind, reported: false, reason: '' };
     this.summaries.push(row);
     this.updateSummary(row, s);
+    return row;
+  }
+
+  /** W7 mobility-test result (see mobilitySummary). Returns the stored row or null at the cap. */
+  addMobilitySummary(s: MobilitySummaryFields): SummaryRow | null {
+    if (this.summaries.length >= MAX_SUMMARIES) { this.truncated = true; return null; }
+    const t = r3(this.now());
+    const row: SummaryRow = { ...s, t, wall: this.wall(t) };
+    this.summaries.push(row);
     return row;
   }
 

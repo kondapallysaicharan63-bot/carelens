@@ -27,9 +27,16 @@ _OPTIONAL_TOP = ("truncated", "summaries")
 _EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
 _EV_REQ = ("t", "wall", "kind")
 _EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
-SUMMARY_KINDS = ("hrv",)
+SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed")
+MOBILITY_KINDS = SUMMARY_KINDS[1:]
+PHASE_KEYS = ("rise", "walk_out", "turn_1", "walk_back", "turn_2", "sit")
+MAX_REP_TIMES = 100
+# reported rows must carry this headline number (kind -> required fields)
+_SUM_HEADLINE = {"hrv": ("rmssd_ms", "sdnn_ms"), "chair_stand_30s": ("reps",), "sit_to_stand_5x": ("time_s",), "tug": ("time_s",),
+                 "walking_speed": ("speed_m_s",)}
 _SUM_REQ = ("t", "wall", "kind", "reported", "reason")
-_SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s")
+_SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s",
+                      "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s")
 
 
 class SessionError(ValueError):
@@ -192,8 +199,31 @@ def _summary_errors(e, w: str, errs: list) -> None:
             errs.append(f"{w}.{k}: expected an integer >= 0")
     if "kept_frac" in e and not (_num(e["kept_frac"]) and 0 <= e["kept_frac"] <= 1):
         errs.append(f"{w}.kept_frac: expected a number in [0, 1]")
-    if e.get("reported") is True and not (_num(e.get("rmssd_ms")) and _num(e.get("sdnn_ms"))):
-        errs.append(f"{w}: reported rows need rmssd_ms and sdnn_ms")
+    # W7 mobility tests (wellbeing trends; no norms): all optional, ``kind`` says which apply
+    if "reps" in e and not (_int(e["reps"]) and e["reps"] >= 0):
+        errs.append(f"{w}.reps: expected an integer >= 0")
+    for k in ("time_s", "speed_m_s"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
+    if "cadence_spm" in e and not (_num(e["cadence_spm"]) and e["cadence_spm"] > 0):
+        errs.append(f"{w}.cadence_spm: expected a number > 0")
+    if "quality" in e and not (_num(e["quality"]) and 0 <= e["quality"] <= 1):
+        errs.append(f"{w}.quality: expected a number in [0, 1]")
+    if "rep_times_s" in e:
+        r = e["rep_times_s"]
+        if not (isinstance(r, list) and len(r) <= MAX_REP_TIMES and all(_num(v) and v >= 0 for v in r)):
+            errs.append(f"{w}.rep_times_s: expected up to {MAX_REP_TIMES} numbers >= 0")
+    if "phases_s" in e:
+        ph = e["phases_s"]
+        if not isinstance(ph, dict):
+            errs.append(f"{w}.phases_s: must be an object")
+        else:
+            _extra(ph, PHASE_KEYS, f"{w}.phases_s", errs)
+            errs += [f"{w}.phases_s.{k}: expected a number >= 0" for k, v in ph.items() if k in PHASE_KEYS and not (_num(v) and v >= 0)]
+    if e.get("reported") is True and e.get("kind") in _SUM_HEADLINE:
+        need = _SUM_HEADLINE[e["kind"]]
+        if not all(_num(e.get(k)) for k in need):
+            errs.append(f"{w}: reported rows need {' and '.join(need)}")
 
 
 def load_session(path) -> dict:
