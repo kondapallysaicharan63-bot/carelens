@@ -88,3 +88,8 @@ progress { width: 100%; max-width: 640px; height: 12px; accent-color: var(--acce
 .event-text { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
 .field { display: grid; gap: 4px; font-size: 0.9rem; margin: 8px 0 0; }
 .field select { font: inherit; min-height: 44px; max-width: 100%; }
+.level { margin: 8px 0 0; display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+.level-bar { height: 10px; border-radius: 5px; border: 1px solid var(--muted); background: var(--bg); overflow: hidden; }
+.level-fill { display: block; height: 100%; width: 0; background: var(--accent); }
+.timeline { position: relative; height: 22px; margin: 8px 0 0; border-bottom: 2px solid var(--border); }
+.tick { position: absolute; bottom: 0; width: 3px; height: 18px; background: var(--q-ok); border-radius: 1px; }

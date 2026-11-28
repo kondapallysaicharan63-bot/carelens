@@ -7,6 +7,7 @@ import { runContactPpg } from './ppg';
 import { runFaceRppg } from './rppg';
 import { runPoseFixture } from './pipeline';
 import { BreathingRateEstimator } from './breathing';
+import { runAudioEnvelope, runBreathEnv, runLabelEvents } from './audio';
 
 export interface Fixture {
   name: string;
@@ -23,6 +24,12 @@ export type Implementation = (fx: Fixture, params: any) => any;
 const ppgContact: Implementation = (fx, params) => runContactPpg(fx.input, params.contact_ppg);
 
 const faceRppg: Implementation = (fx, params) => runFaceRppg(fx.input, params.rppg);
+
+const audioEnvelope: Implementation = (fx, params) => runAudioEnvelope(fx.input, params.audio);
+
+const breathEnv: Implementation = (fx, params) => runBreathEnv(fx.input, params.audio);
+
+const labelEvents: Implementation = (fx, params) => runLabelEvents(fx.input, params.audio);
 
 const landmarks: Implementation = (fx, params) => runPoseFixture(fx.input, params, false);
 
@@ -65,13 +72,28 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   rppg_small_face: faceRppg,
   rppg_skin_filter: faceRppg,
   rppg_disagree_flicker: faceRppg,
+  audio_envelope_shaped_noise: audioEnvelope,
+  audio_breath_8bpm: breathEnv,
+  audio_breath_12bpm: breathEnv,
+  audio_breath_18bpm: breathEnv,
+  audio_breath_30bpm: breathEnv,
+  audio_breath_double_peaks_15bpm: breathEnv,
+  audio_breath_double_equal_15bpm: breathEnv,
+  audio_breath_talking: breathEnv,
+  audio_breath_too_quiet: breathEnv,
+  audio_breath_clipping: breathEnv,
+  audio_cough_single: labelEvents,
+  audio_cough_bout_merge: labelEvents,
+  audio_cough_borderline_hysteresis: labelEvents,
+  audio_cough_sustained_noise: labelEvents,
+  audio_cough_speech_only: labelEvents,
 };
 
 const TOL_KEYS: Record<string, [string, number]> = {
   value: ['value_bpm', 0.5], quality: ['quality', 0.05], t: ['t_s', 0.05],
   t_onset: ['event_time_s', 0.1], t_confirmed: ['event_time_s', 0.1],
   torso_angle_deg: ['torso_angle_deg', 0.05], motion: ['motion', 0.01],
-  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01],
+  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01], envelope: ['env_log10', 1e-4],
 };
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 

@@ -17,6 +17,9 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 | `ppg_contact` | `t[]` (s), `r[]`, `g[]`, `b[]` (mean of the central ROI per frame, 0-255), `clip_frac[]` (fraction of ROI pixels with R >= 250), `truth_bpm` (inputs rounded to 4 dp) | Feed frames one by one to `ContactPPG.update(t, r, g, b, clip_frac)`; collect each non-null output (one per `contact_ppg.step_s`). Design and gates: `carelens/ppg.py` docstring. |
 | `face_rppg` | `t[]`, `roi_rgb[]` (mean [R,G,B] over the skin ROI, `null` = no face), `roi_px[]`, `face_motion[]` (eye spans/s), `brightness[]`, optional `skin_frac[]` (share of ROI pixels kept by the skin filter, default 1), `truth_bpm`, `skin` | Feed frames to `FaceRPPG.update(t, roi_rgb, roi_px, face_motion, brightness)`; collect each non-null output. Design and gates: `carelens/rppg.py` docstring. |
 | `pose_chain` | as `landmarks` plus `t[]` (frame times; default `i/fps`) and `gaps` (`[[frame_index, gap_s], ...]`: camera unobserved before that frame, timestamps already include the jump) | The whole browser chain, wired as `pipeline.run`: `PresenceTracker` -> `FeatureExtractor` -> `FallDetector` (held frames, `pause`) + `InactivityDetector` (`pause`); gap = `tracker.skip_gap`, `feats.reset`, detectors `pause`. |
+| `audio_envelope` | `fs` (16000), `pcm_b64` (int16 LE PCM, base64) | `audio.envelope`: STFT 512/hop 320, Hann, radix-2 FFT, 150-2000 Hz power summed, `log10(p + eps)`; plus per-frame clip fraction (`\|x\| >= 0.99`). |
+| `audio_breath_env` | `fs_env` (50), `env[]` (log band-power envelope, null = no mic), optional `clip[]` (per-frame clip fraction), `speech[]` (`[t, score]` YAMNet Speech frames, delivered once the envelope clock reaches `t`), `truth_bpm` | `BreathSoundRate.push_speech` / `push(t = i/fs_env, env, clip)`; collect each non-null output. Design and gates: `carelens/audio.py` docstring. |
+| `audio_label_events` | `label` (`Cough`), `frames[]` (`[t, score]`, hop 0.48 s) | `detect_label_events` with that label's `params.audio` section. |
 | `landmarks` | `fps`, `aspect`, `landmark_indices` (MediaPipe indices), `landmarks[frame][k] = [x, y, visibility]` (x normalised by width, y by height; unlisted landmarks are visibility 0.2; `null` = no person), optional `config` overrides | `FeatureExtractor` -> `FallDetector` + `InactivityDetector`, no tracker. |
 
 ## Expected outputs
@@ -38,6 +41,9 @@ Floats are rounded to 6 dp; inputs are rounded *before* the reference runs. A to
 
 - `pose_chain` fixtures: `expected` = `events[]` and `features_1hz[]` as above, plus `posture_runs[] = {t, posture}` and `presence_runs[] = {t, state}` (`absent|present|held`), run-length encoded (labels exact, times within `t_s`).
 - `chest_trace_breathing` runs through `vitals.estimate_window`: Butterworth band-pass (params `vitals.breathing`, band 0.1-0.7 Hz since params v6) + Welch. Parity is at the displacement level; the browser image -> displacement step (`web/src/core/chestShift.ts`) is platform specific and unit-tested separately.
+- `audio_envelope`: `expected = {envelope[], clip_frac[]}`, envelope within 1e-4 (log10 units), clip fractions 1e-4.
+- `audio_breath_env`: `expected.updates[] = {t, bpm, quality, reported, reason, snr, bumps, alt, range_log10, clip_frac, speech_frac}` (`bumps`/`alt`: complete envelope bumps found and the odd/even alternation measure, null when not evaluated); `reason` is one of `ok`, `no_mic`, `too_quiet`, `clipping`, `talking`, `settling`, `low_signal` (SNR below the gate), `ambiguous` (doubled-rate rule: no clear evidence whether the bump rate or half of it is the breathing rate; `bpm` null). Compare count, `t`, `bpm` (0.3), `quality` (0.03), `snr`, `bumps`, `alt` and **`reported` and `reason` exactly**.
+- `audio_label_events`: `expected = {events[] = {t_start, t_end, peak_score}, count}`; count and event boundaries exact.
 
 ## Fixtures
 
@@ -53,3 +59,5 @@ W3 `pose_chain`: `track_dropout_fill`, `track_enter_hysteresis`, `track_fast_fal
 `ppg_finger_lift` (20-28 s: `no_finger`), `ppg_harmonic_trap` (2nd harmonic stronger than the fundamental).
 
 `rppg_clean_{light_72,medium_90,dark_60}bpm` (synthetic skin-tone profiles, a documented approximation, not evidence about people), `rppg_motion_burst`, `rppg_lighting_step`, `rppg_face_lost`, `rppg_small_face`, `rppg_skin_filter`, `rppg_disagree_flicker` (POS vs CHROM disagree: withheld).
+
+W4 audio (synthetic only; no recordings of people): `audio_envelope_shaped_noise`; `audio_breath_{8,12,18}bpm` and `audio_breath_30bpm` (one broad bump per breath: reported, though 8 and 12 have a few `ambiguous` windows with few bumps), `audio_breath_double_peaks_15bpm` (inhale and exhale bumps alternate in loudness: the true 15/min is reported, never 30), `audio_breath_double_equal_15bpm` (two equal short bumps per breath: withheld as `ambiguous`, never 2x or 1/2x), `audio_breath_talking` (withheld as `talking` until the speech leaves the window), `audio_breath_too_quiet`, `audio_breath_clipping`; `audio_cough_{single,bout_merge,borderline_hysteresis,sustained_noise,speech_only}`.

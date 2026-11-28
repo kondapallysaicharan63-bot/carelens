@@ -17,15 +17,19 @@ import numpy as np
 _EPS = 1e-30
 
 
-class SpectralParams(Protocol):
+class PeakParams(Protocol):
+    """Fields used by the peak picker and the SNR (``audio.breathing`` provides just these)."""
     band_lo_hz: float
     band_hi_hz: float
-    taper_stop_lo_hz: float
-    taper_stop_hi_hz: float
     snr_halfwidth_hz: float
     harm_halfwidth_hz: float
     harm_w2: float
     harm_w3: float
+
+
+class SpectralParams(PeakParams, Protocol):
+    taper_stop_lo_hz: float
+    taper_stop_hi_hz: float
 
 
 def grid_times(t_end: float, n: int, fs: float) -> np.ndarray:
@@ -96,7 +100,10 @@ def _peak_bin(power: np.ndarray, n_fft: int, fs: float, f: float, hw: float, k_l
     return -1 if hi < lo else lo + int(np.argmax(power[lo:hi + 1]))
 
 
-def _harmonic_score(power: np.ndarray, n_fft: int, fs: float, f: float, p: SpectralParams) -> float:
+peak_bin = _peak_bin   # public alias (carelens.audio uses it for the sub-harmonic check)
+
+
+def _harmonic_score(power: np.ndarray, n_fft: int, fs: float, f: float, p: PeakParams) -> float:
     """S(f) = P(f) + w2 P(2f) + w3 P(3f); P = peak power within +-harm_halfwidth; terms at/above Nyquist are 0."""
     top = n_fft // 2
     sc = 0.0
@@ -108,7 +115,7 @@ def _harmonic_score(power: np.ndarray, n_fft: int, fs: float, f: float, p: Spect
     return sc
 
 
-def spectral_peak(power: np.ndarray, n_fft: int, fs: float, p: SpectralParams) -> float:
+def spectral_peak(power: np.ndarray, n_fft: int, fs: float, p: PeakParams) -> float:
     """Refined in-band fundamental (Hz). Candidates f*, f*/2, 2f* (in band) are scored by the harmonic sum
     S(f); the best wins, ties go to the higher f. Guards against half- and double-rate picks."""
     k_lo, k_hi = band_bins(n_fft, fs, p.band_lo_hz, p.band_hi_hz)
@@ -127,7 +134,7 @@ def spectral_peak(power: np.ndarray, n_fft: int, fs: float, p: SpectralParams) -
     return (best_k + parabolic_log(power, best_k)) * fs / n_fft
 
 
-def spectral_snr(power: np.ndarray, n_fft: int, fs: float, f_star: float, p: SpectralParams) -> float:
+def spectral_snr(power: np.ndarray, n_fft: int, fs: float, f_star: float, p: PeakParams) -> float:
     k_lo, k_hi = band_bins(n_fft, fs, p.band_lo_hz, p.band_hi_hz)
     f = np.arange(k_lo, k_hi + 1) * fs / n_fft
     pw = power[k_lo:k_hi + 1]

@@ -13,6 +13,9 @@ import { buildFingertipView, FingertipSession } from './fingertip';
 import { buildFaceCard, FaceHrSession, type FaceCard } from './faceHr';
 import { qualityMeter } from './quality';
 import { buildPoseCards, type PoseCards } from './poseCards';
+import { buildAudioCards, buildAudioOffCards, type AudioCards } from './audioCards';
+import { AudioSession } from '../capture/audioSession';
+import { createYamnet } from '../capture/yamnet';
 import { Consent, DISCLAIMER } from './consent';
 import { el } from './dom';
 import { NOT_OFFERED } from './notOffered';
@@ -27,6 +30,8 @@ export function mountApp(root: HTMLElement): void {
   let poseSession: PoseSession | null = null;
   let faceSession: FaceHrSession | null = null;
   let fingertipSession: FingertipSession | null = null;
+  let audioSession: AudioSession | null = null;
+  let audioCards: AudioCards | null = null;
   let mode: Mode = 'standard';
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
   let stdCamera = consent.state.camera;
@@ -140,7 +145,7 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(pose?: PoseCards, face?: FaceCard): HTMLElement {
+  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
@@ -150,6 +155,8 @@ export function mountApp(root: HTMLElement): void {
       if (t === 'Heart rate (face)' && face) grid.append(face.root);
       else if (t === 'Breathing rate' && pose) grid.append(pose.breathing);
       else if (t === 'Fall and inactivity check-in' && pose) grid.append(pose.checkins);
+      else if (t === 'Breathing (sound)') grid.append((audio ?? buildAudioOffCards()).breathing);
+      else if (t === 'Cough sounds') grid.append((audio ?? buildAudioOffCards()).cough);
       else grid.append(makeCard(t, 1, n).root);
     }
     r.append(grid);
@@ -170,6 +177,9 @@ export function mountApp(root: HTMLElement): void {
     faceSession = null;
     fingertipSession?.end();
     fingertipSession = null;
+    audioSession?.end();
+    audioSession = null;
+    audioCards = null;
     stopStream(stream);
     stream = null;
   }
@@ -202,13 +212,17 @@ export function mountApp(root: HTMLElement): void {
 
     const live = el('section', { class: 'panel live' }, el('h2', {}, 'Live'), status, warn);
     const face = consent.state.camera ? buildFaceCard(qualityMeter) : undefined;
+    const audio = consent.state.mic ? buildAudioCards(qualityMeter) : null;
+    audioCards = audio;
     if (pose) live.append(pose.banner);
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face), notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio), notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
+      audioSession?.end(); // release the old microphone graph before its stream stops
+      audioSession = null;
       stopStream(stream);
       stream = null;
       warn.hidden = true;
@@ -259,6 +273,7 @@ export function mountApp(root: HTMLElement): void {
       }
       poseSession?.restart(); // re-bind the frame loops to the (new) stream
       faceSession?.restart();
+      if (audioCards && stream) startAudio(g, audioCards, stream); // (re)start the audio chain; the cough count starts again
       return true;
     };
 
@@ -298,6 +313,7 @@ export function mountApp(root: HTMLElement): void {
     });
 
     if (!(await openWith(choice))) return;
+    if (g !== gen) return;
     if (!consent.state.camera) return;
 
     // Face heart rate: FaceLandmarker on every frame, but only while its card is active (front camera is the default).
@@ -321,6 +337,22 @@ export function mountApp(root: HTMLElement): void {
       if (!session.isEnded) pose!.setStatus('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
     }
     await faceLoad;
+  }
+
+  /** Mic consent is on: worklet capture + envelope + YAMNet. A failure only affects the two audio cards. */
+  function startAudio(g: number, cards: AudioCards, s: MediaStream): void {
+    audioSession?.end();
+    cards.reset();
+    const session = new AudioSession(cards.hooks);
+    audioSession = session;
+    session.start(s).then(
+      (running) => { if (running && g === gen && !session.isEnded) void session.loadYamnet(createYamnet); },
+      (err) => {
+        if (session.isEnded) return;
+        cards.reset(); // no stale reading or "no microphone" state from before
+        cards.hooks.onYamnet('failed', 'microphone processing unavailable: ' + (err instanceof Error ? err.message : String(err)));
+      },
+    );
   }
 
   /** Fingertip heart-rate mode: back camera, torch on when supported, ROI frame loop -> core. */

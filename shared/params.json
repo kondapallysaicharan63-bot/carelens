@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -205,8 +205,56 @@
     "band_hi_hz": 12.0
   },
   "audio": {
-    "reserved": true,
     "classifier": "YAMNet",
-    "labels": ["Cough", "Snoring", "Screaming", "Crying, sobbing", "Glass", "Thump, thud"]
+    "labels": ["Cough", "Snoring", "Screaming", "Crying, sobbing", "Glass", "Thump, thud"],
+    "fs_hz": 16000,
+    "envelope": {
+      "frame_len": 512,
+      "hop": 320,
+      "band_lo_hz": 150.0,
+      "band_hi_hz": 2000.0,
+      "eps": 1e-12
+    },
+    "yamnet": {
+      "window_samples": 15600,
+      "hop_samples": 7680,
+      "speech_label": "Speech"
+    },
+    "breathing": {
+      "window_s": 30.0,
+      "step_s": 2.0,
+      "band_lo_hz": 0.1,
+      "band_hi_hz": 0.7,
+      "zero_pad_factor": 4,
+      "snr_halfwidth_hz": 0.05,
+      "harm_halfwidth_hz": 0.04,
+      "harm_w2": 0.5,
+      "harm_w3": 0.33,
+      "settle_s": 20.0,
+      "min_range_log10": 0.25,
+      "clip_level": 0.99,
+      "clip_frac_max": 0.01,
+      "speech_thr": 0.5,
+      "speech_frac_max": 0.1,
+      "min_snr": 3.0,
+      "q_snr_full_db": 12.0,
+      "sub_ratio": 0.03,
+      "smooth_s": 0.3,
+      "bump_prom_frac": 0.2,
+      "min_bump_s": 0.2,
+      "min_bumps": 3,
+      "min_alt_bumps": 8,
+      "rate_tol": 0.15,
+      "alt_min": 0.25,
+      "width_min": 0.4
+    },
+    "cough": {
+      "label": "Cough",
+      "on_thr": 0.5,
+      "off_thr": 0.3,
+      "min_frames": 1,
+      "merge_gap_s": 1.0,
+      "refractory_s": 2.0
+    }
   }
 }

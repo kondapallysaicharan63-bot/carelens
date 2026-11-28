@@ -315,9 +315,106 @@ class Rppg(_M):
         return self
 
 
-class Audio(_Reserved):
+class AudioEnvelope(_M):
+    frame_len: int
+    hop: int
+    band_lo_hz: float
+    band_hi_hz: float
+    eps: float
+
+
+class Yamnet(_M):
+    window_samples: int
+    hop_samples: int
+    speech_label: str
+
+
+class AudioBreathing(_M):
+    window_s: float
+    step_s: float
+    band_lo_hz: float
+    band_hi_hz: float
+    zero_pad_factor: int
+    snr_halfwidth_hz: float
+    harm_halfwidth_hz: float
+    harm_w2: float
+    harm_w3: float
+    settle_s: float
+    min_range_log10: float
+    clip_level: float
+    clip_frac_max: float
+    speech_thr: float
+    speech_frac_max: float
+    min_snr: float
+    q_snr_full_db: float
+    sub_ratio: float
+    smooth_s: float
+    bump_prom_frac: float
+    min_bump_s: float
+    min_bumps: int
+    min_alt_bumps: int
+    rate_tol: float
+    alt_min: float
+    width_min: float
+
+
+class LabelEvents(_M):
+    """Hysteresis event detector over per-frame scores of one YAMNet label (carelens/audio.py)."""
+    label: str
+    on_thr: float
+    off_thr: float
+    min_frames: int
+    merge_gap_s: float
+    refractory_s: float
+
+
+def audio_errors(p: dict) -> List[str]:
+    """Consistency checks for ``audio`` (mirrored by audioErrors in web/src/core/audio.ts)."""
+    e: List[str] = []
+    env, b = p["envelope"], p["breathing"]
+    n = env["frame_len"]
+    if n < 2 or n & (n - 1) or env["hop"] < 1 or env["hop"] > n:
+        e.append("envelope.frame_len must be a power of two >= 2 and 1 <= hop <= frame_len")
+    if not 0 <= env["band_lo_hz"] < env["band_hi_hz"] <= p["fs_hz"] / 2 or not env["eps"] > 0:
+        e.append("need 0 <= envelope.band_lo < band_hi <= Nyquist and eps > 0")
+    env_fs = p["fs_hz"] / max(env["hop"], 1)
+    if not 0 < b["band_lo_hz"] < b["band_hi_hz"] < env_fs / 2:
+        e.append("need 0 < breathing.band_lo < band_hi < envelope Nyquist")
+    if not 0 < b["settle_s"] <= b["window_s"] or not b["step_s"] > 0 or b["zero_pad_factor"] < 1:
+        e.append("need 0 < settle_s <= window_s, step_s > 0, zero_pad_factor >= 1")
+    for k in ("snr_halfwidth_hz", "harm_halfwidth_hz", "min_range_log10", "min_snr", "sub_ratio", "smooth_s", "min_bump_s", "rate_tol", "alt_min", "width_min"):
+        if not b[k] > 0:
+            e.append(f"breathing.{k} must be > 0")
+    if not (0 < b["clip_level"] <= 1 and 0 <= b["clip_frac_max"] < 1 and 0 <= b["speech_thr"] <= 1 and 0 <= b["speech_frac_max"] < 1):
+        e.append("clip_level/speech_thr in (0, 1], clip_frac_max/speech_frac_max in [0, 1)")
+    if b["harm_w2"] < 0 or b["harm_w3"] < 0 or not b["q_snr_full_db"] > 10.0 * math.log10(max(b["min_snr"], 1e-300)):
+        e.append("harm weights >= 0 and q_snr_full_db above the gate in dB")
+    if not (0 < b["bump_prom_frac"] < 1 and b["min_bumps"] >= 3 and b["min_alt_bumps"] >= 4 and b["rate_tol"] < 0.5):
+        e.append("need 0 < bump_level_frac < 1, min_bumps >= 3, rate_tol < 0.5")
+    y = p["yamnet"]
+    if y["window_samples"] < 1 or not 1 <= y["hop_samples"] <= y["window_samples"]:
+        e.append("need 1 <= yamnet.hop_samples <= window_samples")
+    lab = p["cough"]
+    if not 0 < lab["off_thr"] <= lab["on_thr"] <= 1 or lab["min_frames"] < 1 or lab["merge_gap_s"] < 0 or lab["refractory_s"] < 0:
+        e.append("cough: need 0 < off_thr <= on_thr <= 1, min_frames >= 1, merge_gap_s/refractory_s >= 0")
+    return e
+
+
+class Audio(_M):
     classifier: str
     labels: List[str]
+    fs_hz: int
+    envelope: AudioEnvelope
+    yamnet: Yamnet
+    breathing: AudioBreathing
+    cough: LabelEvents
+
+    @model_validator(mode="after")
+    def _check(self) -> "Audio":
+        errs = audio_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
 
 
 class Params(_M):

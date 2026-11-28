@@ -4,9 +4,14 @@
 // object with the SpectralParams fields (contact_ppg and rppg in shared/params.json both qualify).
 // Not a medical device.
 
-export interface SpectralParams {
-  band_lo_hz: number; band_hi_hz: number; taper_stop_lo_hz: number; taper_stop_hi_hz: number;
+/** Fields used by the peak picker and the SNR (audio.breathing provides just these). */
+export interface PeakParams {
+  band_lo_hz: number; band_hi_hz: number;
   snr_halfwidth_hz: number; harm_halfwidth_hz: number; harm_w2: number; harm_w3: number;
+}
+
+export interface SpectralParams extends PeakParams {
+  taper_stop_lo_hz: number; taper_stop_hi_hz: number;
 }
 
 export const EPS = 1e-30;
@@ -157,14 +162,14 @@ export function parabolicLog(power: ArrayLike<number>, k: number): number {
   return parabolicLin(Math.log(power[k - 1]! + EPS), Math.log(power[k]! + EPS), Math.log(power[k + 1]! + EPS));
 }
 
-function peakBin(power: ArrayLike<number>, nFft: number, fs: number, f: number, hw: number, kLo: number, kHi: number): number {
+export function peakBin(power: ArrayLike<number>, nFft: number, fs: number, f: number, hw: number, kLo: number, kHi: number): number {
   const lo = Math.max(kLo, Math.ceil(((f - hw) * nFft) / fs - 1e-9));
   const hi = Math.min(kHi, Math.floor(((f + hw) * nFft) / fs + 1e-9));
   return hi < lo ? -1 : argmax(power, lo, hi);
 }
 
 /** S(f) = P(f) + w2 P(2f) + w3 P(3f); P = peak power within +-harm_halfwidth; terms at/above Nyquist are 0. */
-function harmonicScore(power: ArrayLike<number>, nFft: number, fs: number, f: number, p: SpectralParams): number {
+function harmonicScore(power: ArrayLike<number>, nFft: number, fs: number, f: number, p: PeakParams): number {
   let sc = 0;
   for (const [mult, w] of [[1, 1], [2, p.harm_w2], [3, p.harm_w3]] as const) {
     if (mult * f < fs / 2) {
@@ -176,7 +181,7 @@ function harmonicScore(power: ArrayLike<number>, nFft: number, fs: number, f: nu
 }
 
 /** Refined in-band fundamental (Hz): candidates f0, f0/2 and 2 f0 scored by the harmonic sum; ties go to the higher f. */
-export function spectralPeak(power: Float64Array, nFft: number, fs: number, p: SpectralParams): number {
+export function spectralPeak(power: Float64Array, nFft: number, fs: number, p: PeakParams): number {
   const [kLo, kHi] = bandBins(nFft, fs, p.band_lo_hz, p.band_hi_hz);
   const k0 = argmax(power, kLo, kHi);
   const f0 = (k0 * fs) / nFft;
@@ -191,7 +196,7 @@ export function spectralPeak(power: Float64Array, nFft: number, fs: number, p: S
   return ((bestK + parabolicLog(power, bestK)) * fs) / nFft;
 }
 
-export function spectralSnr(power: Float64Array, nFft: number, fs: number, fStar: number, p: SpectralParams): number {
+export function spectralSnr(power: Float64Array, nFft: number, fs: number, fStar: number, p: PeakParams): number {
   const [kLo, kHi] = bandBins(nFft, fs, p.band_lo_hz, p.band_hi_hz);
   let sig = 0, noise = 0;
   const two = 2 * fStar < fs / 2;

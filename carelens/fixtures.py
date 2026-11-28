@@ -30,6 +30,7 @@ from .ppg import run_contact_ppg, synth_trace
 from .rppg import run_face_rppg, synth_face_trace
 from .synth import ASPECT, Scenario, Segment
 from .vitals import BreathingRateEstimator, HeartRateEstimator
+from . import audio as AU
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "shared" / "fixtures"
 DP = 6
@@ -160,6 +161,9 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "pose_chain": run_pose_chain,
     "ppg_contact": run_contact_ppg,
     "face_rppg": run_face_rppg,
+    "audio_envelope": AU.run_audio_envelope,
+    "audio_breath_env": AU.run_breath_env,
+    "audio_label_events": AU.run_label_events,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
@@ -168,6 +172,10 @@ TOL_PPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "ibi_ms": 5.0, "snr": 0.05,
            "reported": "exact", "reason": "exact", "update_count": "exact"}
 TOL_RPPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
             "reported": "exact", "reason": "exact", "update_count": "exact"}
+TOL_AUDIO_ENV = {"env_log10": 1e-4, "reported": "exact"}
+TOL_BREATH_SOUND = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
+                    "reported": "exact", "reason": "exact", "update_count": "exact"}
+TOL_AUDIO_EVENTS = {"event_count": "exact", "t_start": "exact", "t_end": "exact", "peak_score": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -176,7 +184,7 @@ def _fixture(name, description, level, inp, tolerance) -> dict:
     inp = _round(inp)
     return {"name": name, "description": description, "input_level": level,
             "params_version": PARAMS.version, "input": inp,
-            "expected": RUNNERS[level](inp), "tolerance": tolerance}
+            "expected": _round(RUNNERS[level](inp)), "tolerance": tolerance}
 
 
 # ------------------------------------------------------------------ generators
@@ -264,6 +272,87 @@ def _rppg(name, desc, dur=32.0, bpm=72.0, seed=0, skin="medium", **kw):
     if min(tr["skin_frac"]) < 1.0:
         inp["skin_frac"] = [round(v, 3) for v in tr["skin_frac"]]
     return _fixture(name, desc, "face_rppg", inp, TOL_RPPG)
+
+
+def _audio_env(name, desc, x):
+    return _fixture(name, desc, "audio_envelope", {"fs": PARAMS.audio.fs_hz, "pcm_b64": AU.encode_pcm(x)}, TOL_AUDIO_ENV)
+
+
+def _breath(name, desc, dur=50.0, bpm=15.0, seed=0, speech=None, clip=None, speech_mod=None, **kw):
+    """Envelope-level breath-sound fixture. ``speech`` = (t0, t1): YAMNet Speech scores high in that span, and the
+    envelope gets a syllabic (4 Hz) modulation; ``clip`` = (t0, t1, frac): per-frame clip fraction in that span."""
+    fs = PARAMS.audio.fs_hz / PARAMS.audio.envelope.hop
+    env = AU.synth_breath_envelope(dur, bpm, seed=seed, **kw)
+    t = np.arange(env.size) / fs
+    inp: dict = {"fs_env": fs, "truth_bpm": bpm}
+    if speech is not None:
+        m = (t >= speech[0]) & (t < speech[1])
+        env = env + m * 0.5 * np.sin(2 * np.pi * 4.0 * t)
+        rng = np.random.default_rng(seed + 1000)
+        hop = PARAMS.audio.yamnet.hop_samples / PARAMS.audio.fs_hz
+        frames = np.arange(AU.YAMNET_WINDOW_S, dur, hop)
+        inp["speech"] = [[float(tt), float(np.clip((0.8 if speech[0] <= tt < speech[1] else 0.02) + abs(rng.normal(0, 0.05)), 0, 1))]
+                         for tt in frames]
+    if clip is not None:
+        inp["clip"] = [clip[2] if clip[0] <= tt < clip[1] else 0.0 for tt in t]
+    inp["env"] = [round(float(v), 3) for v in env]
+    return _fixture(name, desc, "audio_breath_env", inp, TOL_BREATH_SOUND)
+
+
+def _scores(name, desc, n, hits, seed=0, floor=0.03, noise=0.02, hop=0.48, label="Cough"):
+    """Cough-score fixture: ``hits`` = {frame_index: score} over a noisy floor."""
+    rng = np.random.default_rng(seed)
+    s = floor + np.abs(rng.normal(0.0, noise, n))
+    for i, v in hits.items():
+        s[i] = v
+    frames = [[round(AU.YAMNET_WINDOW_S + i * hop, 6), round(float(v), 6)] for i, v in enumerate(s)]
+    return _fixture(name, desc, "audio_label_events", {"label": label, "frames": frames}, TOL_AUDIO_EVENTS)
+
+
+def _audio_fixtures() -> list:
+    x = AU.synth_shaped_noise(3.0, seed=401)
+    x[24000:24300] = np.clip(x[24000:24300] * 40.0, -1.0, 1.0)   # an overdriven burst: clip_frac > 0 in a few frames
+    return [
+        _audio_env("audio_envelope_shaped_noise",
+                   "3 s of synthetic coloured noise at 16 kHz (slow modulation, a click, a clipped burst): the 50 Hz log "
+                   "band-power envelope and per-frame clip fraction.", x),
+        _breath("audio_breath_8bpm", "Synthetic breath-sound envelope (50 Hz), 8 breaths/min, one bump per breath.", 50, 8, 301),
+        _breath("audio_breath_12bpm", "12 breaths/min.", 50, 12, 302),
+        _breath("audio_breath_18bpm", "18 breaths/min.", 50, 18, 303),
+        _breath("audio_breath_30bpm",
+                "30 breaths/min, one broad bump per breath: the single-bump evidence (bump spans most of the interval, no "
+                "alternation, no line at 15/min) is clear, so 30 is reported.", 50, 30, 304),
+        _breath("audio_breath_double_peaks_15bpm",
+                "15 breaths/min with inhale AND exhale audible (two bumps per breath, exhale half as loud): the bumps "
+                "alternate, so the true 15/min is reported, not the 30/min bump rate.", 50, 15, 305, double=True, exhale=0.5),
+        _breath("audio_breath_double_equal_15bpm",
+                "Inhale and exhale equally loud and short (two equal bumps per breath, 15/min): fundamentally ambiguous with "
+                "30/min single bumps of a narrower shape, so withheld (reason ambiguous), never a 2x or 1/2x number.",
+                50, 15, 309, double=True, exhale=1.0),
+        _breath("audio_breath_talking", "15 breaths/min; the person talks 22-32 s (YAMNet Speech high, syllabic envelope): "
+                "withheld as talking until the speech leaves the 30 s window, then ok again.", 70, 15, 306, speech=(22.0, 32.0)),
+        _breath("audio_breath_too_quiet", "Almost no envelope variation (muted or distant microphone): too_quiet.",
+                50, 15, 307, amp=0.03, jitter=0.03, drift=0.02),
+        _breath("audio_breath_clipping", "15 breaths/min; 8 % of samples clip 15-25 s (gain too high): clipping until it leaves the 30 s window, then ok.",
+                65, 15, 308, clip=(15.0, 25.0, 0.08)),
+        _scores("audio_cough_single", "One cough (a short burst of high Cough scores): one event.", 62,
+                {19: 0.38, 20: 0.85, 21: 0.68, 22: 0.43, 23: 0.21}, 501),
+        _scores("audio_cough_bout_merge",
+                "Bout 1: two bursts 0.96 s apart (merged); a single cough; one more cough; two single frames 1.44 s apart "
+                "(inside the refractory time: absorbed). Four events.", 62,
+                {20: 0.8, 21: 0.6, 22: 0.1, 23: 0.7, 32: 0.9, 33: 0.4, 38: 0.6, 48: 0.7, 51: 0.7}, 502),
+        _scores("audio_cough_borderline_hysteresis",
+                "Scores that hover: 0.499/0.45 plateaus never start an event; 0.55 then 0.42, 0.33 stays on until 0.29; a "
+                "later 0.52 stays on through exactly 0.30 and ends at 0.299. Two events.", 62,
+                {5: 0.45, 6: 0.45, 7: 0.499, 8: 0.45, 15: 0.55, 16: 0.42, 17: 0.33, 18: 0.29, 19: 0.4,
+                 30: 0.52, 31: 0.31, 32: 0.30, 33: 0.299, 34: 0.45,
+                 45: 0.4, 46: 0.35}, 503),
+        _scores("audio_cough_sustained_noise",
+                "A minute of loud non-cough noise: Cough scores wander 0.1-0.45, never reaching the start threshold. No events.", 125,
+                {i: 0.1 + 0.35 * abs(np.sin(i * 0.37)) * abs(np.cos(i * 0.11)) for i in range(125)}, 504),
+        _scores("audio_cough_speech_only", "Someone talking: Cough scores stay low with a few 0.25-0.35 blips. No events.", 62,
+                {10: 0.25, 11: 0.35, 25: 0.3, 40: 0.28, 41: 0.33}, 505),
+    ]
 
 
 def generate_all() -> dict[str, str]:
@@ -355,7 +444,7 @@ def generate_all() -> dict[str, str]:
         _rppg("rppg_disagree_flicker",
               "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
               32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
-    ]
+    ] + _audio_fixtures()
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
 
@@ -364,9 +453,10 @@ def generate_all() -> dict[str, str]:
 
 _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": "event_time_s",
              "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
-             "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi"}
+             "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi",
+             "envelope": "env_log10"}
 _TOL_DEFAULTS = {"bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
-                 "torso_angle_deg": 0.05, "motion": 0.01}
+                 "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 
 

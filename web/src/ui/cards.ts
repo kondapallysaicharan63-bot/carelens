@@ -30,9 +30,10 @@ export function makeCard(title: string, tier: 1 | 2, note: string, value = 'Not 
 export const TIER1: [string, string][] = [
   ['Heart rate (fingertip)', 'Phone back camera with torch. Wellbeing trend only.'],
   ['Heart rate (face)', 'Contactless, needs steady light and a still face.'],
-  ['Breathing rate', 'From chest motion or breath sounds, when still.'],
+  ['Breathing rate', 'From chest motion, when still.'],
+  ['Breathing (sound)', 'From breath sounds with a close microphone.'],
   ['Fall and inactivity check-in', 'Suggests a check-in; it does not call anyone.'],
-  ['Cough count', 'On-device sound classification.'],
+  ['Cough sounds', 'On-device sound classification.'],
 ];
 export const TIER2: [string, string][] = [
   ['Heart-rate variability', 'Fingertip only. Experimental.'],
