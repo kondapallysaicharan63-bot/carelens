@@ -2,6 +2,7 @@
 labelled falls) and write a report fragment for docs/ACCURACY_REPORT_TEMPLATE.md.
 
     python -m carelens.accuracy --run output/clip_results.json --hr-ref export.xml --out accuracy/
+    python -m carelens.accuracy --web-session session.json --metric hr_fingertip --hr-ref export.xml --out accuracy/
 
 Wellness trends only - this is not a medical device and the numbers are not a diagnosis.
 
@@ -12,6 +13,10 @@ Metric definitions (all errors are camera minus reference):
     (heart rate 15 s, breathing 30 s; runs read from the DB do not store it).
   * Match: a window matches the reference samples within +-tolerance_s of its centre;
     the reference value is their mean (n_ref and spread = sample SD are recorded).
+  * Web sessions (--web-session, the browser app's JSON export, validated against shared/session.schema.json):
+    one --metric (hr_fingertip|hr_face|br_camera|br_sound) is scored with the same alignment and statistics;
+    each estimate's own span_s centres its window, started_at carries its offset (no --tz needed), estimates
+    with a null value are dropped, and a naive reference CSV is read in the session's own zone.
   * Naive timestamps (results start_time, reference CSV) are read in the run's zone: --tz, or
     the DB run's tz_offset_min, else the machine's local zone. Apple XML always has offsets.
   * "Main" metrics use REPORTED windows (quality gate passed) that have a match:
@@ -43,9 +48,12 @@ from typing import Optional
 
 import numpy as np
 
+from . import websession
+
 HR_TYPE = "HKQuantityTypeIdentifierHeartRate"
 MAX_ROWS = 200
 _DEFAULT_WINDOW_S = {"heart_rate": 15.0, "breathing_rate": 30.0}   # legacy results without window_s (HR was the 15 s green estimator); new runs record window_s
+WEB_METRICS = websession.METRICS
 BOOT_N, BOOT_SEED = 2000, 12345
 
 
@@ -56,7 +64,7 @@ def _parse_dt(s: str, default_tz=None) -> float:
     try:
         dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S %z")
     except ValueError:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = websession.parse_iso(s)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=default_tz) if default_tz else dt.astimezone()
     return dt.timestamp()
@@ -143,7 +151,7 @@ def load_run(spec: str, tz: Optional[str] = None) -> dict:
         res = json.loads(Path(spec).read_text())
         tzinfo = _tz_from(tz) if tz else None
         name = Path(spec).stem.removesuffix("_results")
-    start = datetime.fromisoformat(res["start_time"])
+    start = websession.parse_iso(res["start_time"])
     if start.tzinfo is None:
         start = start.replace(tzinfo=tzinfo) if tzinfo else start.astimezone()
     return {"results": res, "start_ts": start.timestamp(), "name": name, "tzinfo": tzinfo}
@@ -178,7 +186,8 @@ def align(windows: list[dict], start_ts: float, ref_t: np.ndarray, ref_v: np.nda
         if len(seg):
             r["ref"] = float(seg.mean())
             r["ref_sd"] = float(seg.std(ddof=1)) if len(seg) > 1 else 0.0
-            r["error"] = float(w["value"] - r["ref"])
+            if w["value"] is not None:   # web sessions keep rows where the estimator withheld a value: counted, never scored
+                r["error"] = float(w["value"] - r["ref"])
         rows.append(r)
     return rows
 
@@ -298,7 +307,7 @@ def _table(rows, unit_label, ref_label):
     out = [f"| Window (clip @ t) | Camera {unit_label} | Quality | Reported | {ref_label} | n ref | Error |",
            "|---|---|---|---|---|---|---|"]
     for r in rows[:MAX_ROWS]:
-        out.append(f"| {r['clip']} @ {r['t']:.0f}s | {r['camera']:.1f} | {r['quality']:.2f} | "
+        out.append(f"| {r['clip']} @ {r['t']:.0f}s | {_f(r['camera'])} | {r['quality']:.2f} | "
                    f"{'yes' if r['reported'] else 'no'} | {_f(r['ref'])} | {r['n_ref']} | "
                    f"{('%+.1f' % r['error']) if r['error'] is not None else 'n/a'} |")
     if len(rows) > MAX_ROWS:
@@ -387,7 +396,7 @@ def evaluate(run: dict, hr_ref=None, br_ref=None, labels=None, tolerance_s=30.0,
         summ = summarize(rows)
         sec = {"windows": rows, "summary": summ, "suggested_offset_s": None, "window_s": ws}
         if wins and summ["n_matched"] == 0:
-            sec["suggested_offset_s"] = suggest_offset(wins, start_ts, ref[0], tolerance_s, window_s=ws)
+            sec["suggested_offset_s"] = suggest_offset([w for w in wins if w["value"] is not None], start_ts, ref[0], tolerance_s, window_s=ws)
         m[key] = sec
     if labels is not None:
         m["events"] = score_events(res.get("events", []), labels, clip, res.get("duration_s", 0), event_tol_s)
@@ -446,7 +455,9 @@ def _fix_argv(argv):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="carelens.accuracy", description=__doc__.split("\n")[0])
-    ap.add_argument("--run", required=True, help="results JSON or db:<path>#<run_id>")
+    ap.add_argument("--run", help="results JSON or db:<path>#<run_id>")
+    ap.add_argument("--web-session", help="session JSON exported by the web app (needs --metric)")
+    ap.add_argument("--metric", choices=WEB_METRICS, help="with --web-session: which estimate series to score")
     ap.add_argument("--hr-ref", help="Apple Health export.xml or CSV (timestamp,bpm)")
     ap.add_argument("--br-ref", help="CSV (timestamp,breaths_per_min)")
     ap.add_argument("--labels", help="CSV clip,kind,onset_s")
@@ -460,7 +471,28 @@ def main(argv=None):
     ap.add_argument("--out", default="accuracy")
     a = ap.parse_args(_fix_argv(list(sys.argv[1:] if argv is None else argv)))
     try:
-        run = load_run(a.run, a.tz)
+        if bool(a.run) == bool(a.web_session):
+            raise ValueError("give exactly one of --run or --web-session")
+        if a.web_session:
+            if not a.metric:
+                raise ValueError("--web-session needs --metric " + "|".join(WEB_METRICS))
+            need_hr = a.metric.startswith("hr_")
+            if not (a.hr_ref if need_hr else a.br_ref):
+                raise ValueError(f"--metric {a.metric} needs {'--hr-ref' if need_hr else '--br-ref'}")
+            if a.tz:
+                print("note: --tz is ignored for web sessions (started_at carries its offset)", file=sys.stderr)
+            run = websession.to_run(websession.load_session(a.web_session), a.metric)
+            ignored = "--br-ref" if need_hr and a.br_ref else "--hr-ref" if not need_hr and a.hr_ref else None
+            if ignored:
+                print(f"note: {ignored} is ignored: --metric {a.metric} scores only its own reference", file=sys.stderr)
+            if need_hr:
+                a.br_ref = None   # only the chosen metric is scored
+            else:
+                a.hr_ref = None
+        else:
+            if a.metric:
+                raise ValueError("--metric only applies with --web-session")
+            run = load_run(a.run, a.tz)
         tz = run["tzinfo"]
         hr = load_reference(a.hr_ref, "bpm", tz) if a.hr_ref else None
         br = load_reference(a.br_ref, "breaths_per_min", tz) if a.br_ref else None

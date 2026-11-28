@@ -3,3 +3,6 @@ dist/
 public/models/
 public/wasm/
 *.tsbuildinfo
+dist-e2e/
+test-results/
+playwright-report/

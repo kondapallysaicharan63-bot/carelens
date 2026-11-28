@@ -19,6 +19,11 @@ import { createYamnet } from '../capture/yamnet';
 import { Consent, DISCLAIMER } from './consent';
 import { el } from './dom';
 import { NOT_OFFERED } from './notOffered';
+import { buildExportPanel } from './exportPanel';
+import { SessionRecorder } from '../export/recorder';
+import type { Mode as RecMode } from '../export/schema';
+import { BreathCameraLogger } from '../export/breathCamera';
+import { CoughRecorder } from '../export/cough';
 
 type Theme = 'auto' | 'light' | 'dark';
 type Mode = 'standard' | 'fingertip';
@@ -36,6 +41,14 @@ export function mountApp(root: HTMLElement): void {
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
   let stdCamera = consent.state.camera;
   let stdMic = consent.state.mic;
+  const dataPanel = buildExportPanel();
+  let recorder: SessionRecorder | null = null;
+  const startRecorder = (modes: RecMode[]): SessionRecorder => {
+    const r = new SessionRecorder(modes);
+    recorder = r;
+    dataPanel.setRecorder(r);
+    return r;
+  };
   let gen = 0; // capture generation: bumped on every Stop/Start so stale async work can bail out
 
   const savedCam = safeGet('videoDeviceId');
@@ -141,6 +154,7 @@ export function mountApp(root: HTMLElement): void {
         start,
       ),
       resultsSections(),
+      dataPanel.root,
       notOffered,
     );
   }
@@ -180,13 +194,30 @@ export function mountApp(root: HTMLElement): void {
     audioSession?.end();
     audioSession = null;
     audioCards = null;
+    if (recorder) void dataPanel.sessionEnded(recorder);
     stopStream(stream);
     stream = null;
   }
 
   async function beginCapture(): Promise<void> {
     const g = ++gen;
+    const rec = startRecorder([...(consent.state.camera ? ['camera' as const] : []), ...(consent.state.mic ? ['microphone' as const] : [])]);
     const pose = consent.state.camera ? buildPoseCards(qualityMeter) : undefined;
+    if (pose) {
+      const h = pose.hooks;
+      const brLog = new BreathCameraLogger(rec, params.vitals.breathing.step_s);
+      pose.hooks = {
+        ...h,
+        onView(v) {
+          h.onView(v);
+          brLog.onView(v);
+        },
+        onEvent(e) {
+          h.onEvent(e);
+          rec.addEvent({ kind: e.kind === 'fall' ? 'possible_fall' : 'inactivity', agoS: e.tConfirmed - e.tOnset, trigger: e.details.trigger });
+        },
+      };
+    }
     const video = el('video', { playsinline: '', muted: '', autoplay: '', 'aria-label': 'Camera preview' });
     video.muted = true;
     video.playsInline = true;
@@ -212,12 +243,37 @@ export function mountApp(root: HTMLElement): void {
 
     const live = el('section', { class: 'panel live' }, el('h2', {}, 'Live'), status, warn);
     const face = consent.state.camera ? buildFaceCard(qualityMeter) : undefined;
+    if (face) {
+      const h = face.hooks;
+      face.hooks = {
+        ...h,
+        onUpdate(u) {
+          h.onUpdate(u);
+          rec.addEstimate({ metric: 'hr_face', value: u.bpm, quality: u.quality, reported: u.reported && u.bpm !== null, reason: u.reason, span_s: u.span_s });
+        },
+      };
+    }
     const audio = consent.state.mic ? buildAudioCards(qualityMeter) : null;
+    if (audio) {
+      const h = audio.hooks;
+      const coughs = new CoughRecorder(rec);
+      audio.hooks = {
+        ...h,
+        onBreath(u) {
+          h.onBreath(u);
+          rec.addEstimate({ metric: 'br_sound', value: u.bpm, quality: u.quality, reported: u.reported && u.bpm !== null, reason: u.reason, span_s: u.span_s });
+        },
+        onCough(r) {
+          h.onCough(r);
+          coughs.update(r); // stored when first seen, updated while the tracker extends or merges it
+        },
+      };
+    }
     audioCards = audio;
     if (pose) live.append(pose.banner);
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face, audio), notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio), dataPanel.root, notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
@@ -331,7 +387,10 @@ export function mountApp(root: HTMLElement): void {
     poseSession = session;
     pose!.onInactivityChange((sec) => session.setInactivitySeconds(sec));
     try {
-      await session.load(createPoseLandmarker, video);
+      // End-to-end builds only (vite --mode e2e): replay a scripted landmark sequence instead of the real model.
+      // The condition is a build-time constant, so the dynamic import and the provider are removed from production builds.
+      const loader = import.meta.env.VITE_E2E === '1' ? (await import('../e2e/scriptedPose')).createScriptedPose : createPoseLandmarker;
+      await session.load(loader, video);
       if (!session.isEnded) pose!.setStatus('Looking for you…');
     } catch (err) {
       if (!session.isEnded) pose!.setStatus('Pose model failed to load: ' + (err instanceof Error ? err.message : String(err)));
@@ -358,11 +417,20 @@ export function mountApp(root: HTMLElement): void {
   /** Fingertip heart-rate mode: back camera, torch on when supported, ROI frame loop -> core. */
   async function beginFingertip(): Promise<void> {
     const g = ++gen;
+    const rec = startRecorder(['fingertip']);
     const view = buildFingertipView(qualityMeter);
+    const vh = view.hooks;
+    view.hooks = {
+      ...vh,
+      onUpdate(u, m, settleLeft) {
+        vh.onUpdate(u, m, settleLeft);
+        rec.addEstimate({ metric: 'hr_fingertip', value: u.bpm, quality: u.quality, reported: u.reported && u.bpm !== null, reason: u.reason, span_s: u.span_s });
+      },
+    };
     const stopBtn = el('button', { type: 'button', class: 'btn', id: 'fp-stop' }, 'Stop');
     stopBtn.addEventListener('click', () => showConsent());
     view.root.append(el('div', { class: 'btnrow' }, stopBtn));
-    main.replaceChildren(view.root, notOffered);
+    main.replaceChildren(view.root, dataPanel.root, notOffered);
     let opened: MediaStream;
     try {
       // Prefer the back camera (a stale remembered deviceId from the standard mode is ignored here).

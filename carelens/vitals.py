@@ -151,7 +151,7 @@ class _WindowEstimator:
         if r is None:
             return None
         est = {"t": round(t, 2), "value": r["value"], "quality": r["quality"],
-               "reported": r["reported"], **(extra or {})}
+               "reported": r["reported"], "span_s": round(float(ts[-1] - ts[0]), 2), **(extra or {})}
         self.estimates.append(est)
         return est
 

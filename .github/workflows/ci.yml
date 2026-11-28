@@ -34,7 +34,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install, typecheck, build, test (build first: tests check dist/)
+      - name: "Install, typecheck, build, test (build first, tests check dist/)"
         if: steps.web.outputs.present == 'true'
         working-directory: web
         run: |
@@ -42,3 +42,36 @@ jobs:
           npm run typecheck
           npm run build
           npm test
+
+  e2e:
+    # Real-browser tests (Playwright + Chromium with synthetic fake camera/microphone media); separate from the unit job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: numpy for the accuracy round trip (carelens.accuracy needs numpy only)
+        run: pip install numpy
+      - name: Cache the pinned model files (key = hash of the fetch script, which pins the SHA-256s)
+        uses: actions/cache@v4
+        with:
+          path: web/public/models
+          key: models-${{ hashFiles('web/scripts/fetch-models.mjs') }}
+      - name: Install, fetch models (SHA-256 checked), build the e2e bundle
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run fetch-models
+          npm run build:e2e
+      - name: End-to-end tests
+        working-directory: web
+        env:
+          PYTHON: python
+        run: npm run e2e

@@ -11,11 +11,14 @@
     "build": "node scripts/prepare-wasm.mjs && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "fetch-models": "node scripts/fetch-models.mjs"
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "build:e2e": "node scripts/prepare-wasm.mjs && tsc --noEmit && vite build --mode e2e --outDir dist-e2e",
+    "e2e": "playwright test --trace off"
   },
   "devDependencies": {
     "@mediapipe/tasks-audio": "^1.2.3",
     "@mediapipe/tasks-vision": "^1.2.3",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.20.7",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "^7.0.2",

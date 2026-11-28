@@ -42,6 +42,8 @@ export interface BreathSoundUpdate {
   range_log10: number | null;
   clip_frac: number | null;
   speech_frac: number | null;
+  /** analysed window length (s); null before the window is analysed */
+  span_s: number | null;
 }
 
 /** Consistency checks mirroring carelens.params.audio_errors. */
@@ -257,10 +259,11 @@ export class BreathSoundRate {
 
   private emit(t: number): BreathSoundUpdate {
     const p = this.p;
-    const out: BreathSoundUpdate = { t, bpm: null, quality: 0, reported: false, reason: 'ok', snr: null, bumps: null, alt: null, range_log10: null, clip_frac: null, speech_frac: null };
+    const out: BreathSoundUpdate = { t, bpm: null, quality: 0, reported: false, reason: 'ok', snr: null, bumps: null, alt: null, range_log10: null, clip_frac: null, speech_frac: null, span_s: null };
     if (this.noMic) { out.reason = 'no_mic'; return out; }
     const n = this.env.length;
     if (n < this.settleN) { out.reason = 'settling'; return out; }
+    out.span_s = n / this.envFs; // analysed window length (s)
     let cs = 0;
     for (const c of this.clip) cs += c;
     out.clip_frac = cs / n;

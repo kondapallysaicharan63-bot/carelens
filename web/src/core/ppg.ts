@@ -39,6 +39,8 @@ export interface PpgUpdate {
   channel: 'R' | 'G' | null;
   /** counts contact restarts; a measurement must restart when it changes */
   contact_epoch: number;
+  /** analysed window length (s); null when no window was analysed */
+  span_s: number | null;
 }
 
 
@@ -129,7 +131,7 @@ export function qualityScore(snr: number, deltaBpm: number | null, pi: number, p
 
 export type WindowAnalysis =
   | { gaps: true }
-  | { gaps: false; channel: 'R' | 'G'; bpm: number; bpm_ibi: number | null; snr: number; pi: number; delta: number | null; ibis_ms: number[]; quality: number };
+  | { gaps: false; span_s: number; channel: 'R' | 'G'; bpm: number; bpm_ibi: number | null; snr: number; pi: number; delta: number | null; ibis_ms: number[]; quality: number };
 
 export function analyzeWindow(ts0: number[], rs0: number[], gs0: number[], p: ContactPpgParams): WindowAnalysis {
   const tEnd = ts0[ts0.length - 1]!;
@@ -177,7 +179,7 @@ export function analyzeWindow(ts0: number[], rs0: number[], gs0: number[], p: Co
   }
   const bpm = 60 * best.fSpec;
   const delta = fIbi === null ? null : bpm - fIbi;
-  return { gaps: false, channel: best.channel, bpm, bpm_ibi: fIbi, snr: best.snr, pi, delta, ibis_ms: ibis, quality: qualityScore(best.snr, delta, pi, p) };
+  return { gaps: false, span_s: w, channel: best.channel, bpm, bpm_ibi: fIbi, snr: best.snr, pi, delta, ibis_ms: ibis, quality: qualityScore(best.snr, delta, pi, p) };
 }
 
 // ------------------------------------------------------------------ streaming
@@ -239,7 +241,7 @@ export class ContactPPG {
 
   private emit(t: number): PpgUpdate {
     const p = this.p;
-    const out: PpgUpdate = { t, bpm: null, bpm_ibi: null, quality: 0, reported: false, reason: 'ok', snr: null, pi: null, channel: null, contact_epoch: this.epoch };
+    const out: PpgUpdate = { t, bpm: null, bpm_ibi: null, quality: 0, reported: false, reason: 'ok', snr: null, pi: null, channel: null, contact_epoch: this.epoch, span_s: null };
     if (this.state !== 'ok') { out.reason = this.state; return out; }
     if (this.contactSince === null || t - this.contactSince < p.settle_s) { out.reason = 'settling'; return out; }
     const a = analyzeWindow(this.t, this.r, this.g, p);
@@ -247,7 +249,7 @@ export class ContactPPG {
     this.lastIbisMs = a.ibis_ms;
     out.bpm = a.bpm;
     out.bpm_ibi = a.bpm_ibi;
-    out.quality = a.quality; out.snr = a.snr; out.pi = a.pi; out.channel = a.channel;
+    out.quality = a.quality; out.snr = a.snr; out.pi = a.pi; out.channel = a.channel; out.span_s = a.span_s;
     if (a.snr < p.min_snr || !(p.pi_min <= a.pi && a.pi <= p.pi_max) || a.delta === null) out.reason = 'low_signal';
     else if (Math.abs(a.delta) > p.agree_bpm) out.reason = 'disagree';
     else { out.reason = 'ok'; out.reported = true; }

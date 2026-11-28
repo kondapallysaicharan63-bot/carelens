@@ -168,7 +168,7 @@ describe('AudioSession YAMNet wiring', () => {
 });
 
 describe('audio card state', () => {
-  const ok = (bpm: number): BreathSoundUpdate => ({ t: 30, bpm, quality: 0.8, reported: true, reason: 'ok', snr: 10, bumps: 8, alt: null, range_log10: 1, clip_frac: 0, speech_frac: null });
+  const ok = (bpm: number): BreathSoundUpdate => ({ t: 30, bpm, quality: 0.8, reported: true, reason: 'ok', snr: 10, bumps: 8, alt: null, range_log10: 1, clip_frac: 0, speech_frac: null, span_s: 30 });
   it('reset clears a stuck "no microphone" state and a stale rate', () => {
     const st = new AudioCardState();
     st.setBreath(ok(15));

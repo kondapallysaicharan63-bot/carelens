@@ -22,7 +22,7 @@ export interface RoiParams {
 export interface VitalsParams { signal: VitalsSignalParams; breathing: BreathingParams; roi: RoiParams }
 export interface CommonParams { still_motion_bodysizes_s: number; min_quality: number }
 
-export interface BreathingEstimate { t: number; value: number; quality: number; reported: boolean }
+export interface BreathingEstimate { t: number; value: number; quality: number; reported: boolean; span_s: number }
 
 const round = (x: number, dp: number): number => { const m = 10 ** dp; return Math.round(x * m) / m; };
 
@@ -108,7 +108,7 @@ export class BreathingRateEstimator {
     this.lastEmit = t;
     const r = estimateWindow(ts, this.buf.map((b) => b[1]), this.p.band_lo_hz, this.p.band_hi_hz, this.minQuality, this.sig);
     if (!r) return { due: true, estimate: null };
-    const est = { t: round(t, 2), value: r.value, quality: r.quality, reported: r.reported };
+    const est = { t: round(t, 2), value: r.value, quality: r.quality, reported: r.reported, span_s: round(ts[ts.length - 1]! - ts[0]!, 2) };
     this.estimates.push(est);
     return { due: true, estimate: est };
   }

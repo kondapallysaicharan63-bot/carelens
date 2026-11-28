@@ -1,0 +1,207 @@
+"""Web session export (shared/session.schema.json): validator and adapter for ``carelens.accuracy``.
+
+The browser app exports one JSON file per session (estimates + check-in events; no media, no device ids).
+``validate`` is hand-written (stdlib only) and mirrors web/src/export/schema.ts; tests keep both in step with the
+JSON schema file. Wellness trends only - not a medical device.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+SCHEMA_VERSION = 1
+METRICS = ("hr_fingertip", "hr_face", "br_camera", "br_sound")
+EVENT_KINDS = ("possible_fall", "inactivity", "cough")
+MODES = ("camera", "microphone", "fingertip")
+UA_FAMILIES = ("Chrome", "Edge", "Firefox", "Safari", "Other")
+# estimator default windows (s) when an estimate carries no span_s
+DEFAULT_SPAN_S = {"hr_fingertip": 10.0, "hr_face": 12.0, "br_camera": 30.0, "br_sound": 30.0}
+
+_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
+_TOP = ("schema_version", "app_version", "params_version", "started_at", "tz_offset_min", "device", "modes",
+        "estimates", "events", "disclaimer")
+_OPTIONAL_TOP = ("truncated",)
+_EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
+_EV_REQ = ("t", "wall", "kind")
+_EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
+
+
+class SessionError(ValueError):
+    """The file is not a valid CareLens web session export; the message lists the problems."""
+
+
+def _num(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _int(x) -> bool:
+    """JSON Schema "integer": 7 and 7.0 are the same JSON number (as in JavaScript); booleans are not numbers."""
+    if isinstance(x, bool):
+        return False
+    return isinstance(x, int) or (isinstance(x, float) and math.isfinite(x) and x.is_integer())
+
+
+_FRAC = re.compile(r"\.(\d+)")
+
+
+def normalize_iso(s: str) -> str:
+    """Make an ISO 8601 string readable by ``datetime.fromisoformat`` on Python 3.10 (which only takes 3 or 6 fractional
+    digits and no 'Z'): fractional seconds are padded or truncated to 6 digits, 'Z' becomes +00:00."""
+    s = _FRAC.sub(lambda m: "." + (m.group(1) + "000000")[:6], s.strip())
+    return s[:-1] + "+00:00" if s.endswith(("Z", "z")) else s
+
+
+def parse_iso(s: str) -> datetime:
+    return datetime.fromisoformat(normalize_iso(s))
+
+
+def _iso(x) -> bool:
+    if not (isinstance(x, str) and _ISO.match(x)):
+        return False
+    try:
+        parse_iso(x)
+    except ValueError:
+        return False
+    return True
+
+
+def _extra(o: dict, allowed, where: str, errs: list) -> None:
+    errs += [f"{where}: unexpected field {k!r}" for k in o if k not in allowed]
+
+
+def validate(x) -> list[str]:
+    """List of problems (empty = valid)."""
+    if not isinstance(x, dict):
+        return ["session: must be a JSON object"]
+    errs: list[str] = []
+    errs += [f"session: missing {k!r}" for k in _TOP if k not in x]
+    _extra(x, _TOP + _OPTIONAL_TOP, "session", errs)
+    if "truncated" in x and not isinstance(x["truncated"], bool):
+        errs.append("truncated: expected a boolean")
+    if "schema_version" in x and not (_int(x["schema_version"]) and x["schema_version"] == SCHEMA_VERSION):
+        errs.append(f"schema_version: expected {SCHEMA_VERSION}, got {x['schema_version']!r}")
+    if "app_version" in x and not (isinstance(x["app_version"], str) and 1 <= len(x["app_version"]) <= 32):
+        errs.append("app_version: expected a string of 1-32 characters")
+    if "params_version" in x and not (_int(x["params_version"]) and x["params_version"] >= 0):
+        errs.append("params_version: expected a non-negative integer")
+    if "started_at" in x and not _iso(x["started_at"]):
+        errs.append("started_at: expected ISO 8601 with a UTC offset")
+    if "tz_offset_min" in x and not (_int(x["tz_offset_min"]) and abs(x["tz_offset_min"]) <= 840):
+        errs.append("tz_offset_min: expected an integer within +-840")
+    if "disclaimer" in x and not (isinstance(x["disclaimer"], str) and x["disclaimer"]):
+        errs.append("disclaimer: expected a non-empty string")
+    if "device" in x:
+        d = x["device"]
+        if not isinstance(d, dict):
+            errs.append("device: must be an object")
+        else:
+            _extra(d, ("user_agent_family",), "device", errs)
+            if d.get("user_agent_family") not in UA_FAMILIES:
+                errs.append(f"device.user_agent_family: expected one of {'|'.join(UA_FAMILIES)}")
+    if "modes" in x:
+        m = x["modes"]
+        if not (isinstance(m, list) and all(isinstance(i, str) and i in MODES for i in m) and len(set(m)) == len(m)):
+            errs.append(f"modes: expected unique items from {'|'.join(MODES)}")
+    for key, check in (("estimates", _estimate_errors), ("events", _event_errors)):
+        if key in x:
+            if not isinstance(x[key], list):
+                errs.append(f"{key}: must be an array")
+            else:
+                for i, e in enumerate(x[key]):
+                    check(e, f"{key}[{i}]", errs)
+    return errs[:50]
+
+
+def _estimate_errors(e, w: str, errs: list) -> None:
+    if not isinstance(e, dict):
+        errs.append(f"{w}: must be an object")
+        return
+    errs += [f"{w}: missing {k!r}" for k in _EST_REQ if k not in e]
+    _extra(e, _EST_REQ + ("span_s",), w, errs)
+    if "t" in e and not (_num(e["t"]) and e["t"] >= 0):
+        errs.append(f"{w}.t: expected a number >= 0")
+    if "wall" in e and not _iso(e["wall"]):
+        errs.append(f"{w}.wall: expected ISO 8601 with a UTC offset")
+    if "metric" in e and e["metric"] not in METRICS:
+        errs.append(f"{w}.metric: expected one of {'|'.join(METRICS)}")
+    if "value" in e and not (e["value"] is None or _num(e["value"])):
+        errs.append(f"{w}.value: expected a number or null")
+    if "quality" in e and not (_num(e["quality"]) and 0 <= e["quality"] <= 1):
+        errs.append(f"{w}.quality: expected a number in [0, 1]")
+    if "reported" in e and not isinstance(e["reported"], bool):
+        errs.append(f"{w}.reported: expected a boolean")
+    if e.get("reported") is True and e.get("value") is None and "value" in e:
+        errs.append(f"{w}: reported rows need a value")
+    if "reason" in e and not (isinstance(e["reason"], str) and len(e["reason"]) <= 40):
+        errs.append(f"{w}.reason: expected a string up to 40 characters")
+    if "span_s" in e and not (_num(e["span_s"]) and e["span_s"] > 0):
+        errs.append(f"{w}.span_s: expected a number > 0")
+
+
+def _event_errors(e, w: str, errs: list) -> None:
+    if not isinstance(e, dict):
+        errs.append(f"{w}: must be an object")
+        return
+    errs += [f"{w}: missing {k!r}" for k in _EV_REQ if k not in e]
+    _extra(e, _EV_ALL, w, errs)
+    if "t" in e and not (_num(e["t"]) and e["t"] >= 0):
+        errs.append(f"{w}.t: expected a number >= 0")
+    if "wall" in e and not _iso(e["wall"]):
+        errs.append(f"{w}.wall: expected ISO 8601 with a UTC offset")
+    if "kind" in e and e["kind"] not in EVENT_KINDS:
+        errs.append(f"{w}.kind: expected one of {'|'.join(EVENT_KINDS)}")
+    for k in ("t_onset", "t_end"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
+    if "peak_score" in e and not (_num(e["peak_score"]) and 0 <= e["peak_score"] <= 1):
+        errs.append(f"{w}.peak_score: expected a number in [0, 1]")
+    if "trigger" in e and not (isinstance(e["trigger"], str) and len(e["trigger"]) <= 40):
+        errs.append(f"{w}.trigger: expected a string up to 40 characters")
+
+
+def load_session(path) -> dict:
+    """Read and validate a session file; raises SessionError (a ValueError) with every problem found."""
+    p = Path(path)
+    if not p.is_file():
+        raise SessionError(f"session file not found: {p}")
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise SessionError(f"{p.name}: not valid JSON ({e})") from e
+    errs = validate(data)
+    if errs:
+        more = "" if len(errs) < 50 else " (first 50 shown)"
+        raise SessionError(f"{p.name} is not a valid CareLens web session export{more}:\n  - " + "\n  - ".join(errs))
+    return data
+
+
+def to_run(session: dict, metric: str, name: str | None = None) -> dict:
+    """Adapt a validated session to the run dict ``carelens.accuracy.evaluate`` takes.
+
+    Rows with value null (the estimator withheld a value) are KEPT: ``accuracy`` counts them in n_windows / coverage
+    like the unreported windows of a device run, and leaves them out of the error statistics. ``t`` is seconds since started_at and each
+    window's span_s centres it (``accuracy.align``); started_at carries its own offset, so no --tz is needed.
+    """
+    if metric not in METRICS:
+        raise SessionError(f"unknown metric {metric!r}; expected one of {', '.join(METRICS)}")
+    start = parse_iso(session["started_at"])
+    rows = [e for e in session["estimates"] if e["metric"] == metric]
+    spans = sorted(float(e["span_s"]) for e in rows if e.get("span_s"))
+    span = spans[len(spans) // 2] if spans else DEFAULT_SPAN_S[metric]
+    wins = []
+    for e in rows:
+        w = {"t": float(e["t"]), "value": None if e["value"] is None else float(e["value"]),
+             "quality": float(e["quality"]), "reported": bool(e["reported"])}
+        w["span_s"] = float(e.get("span_s") or span)
+        wins.append(w)
+    key = "heart_rate" if metric.startswith("hr_") else "breathing_rate"
+    events = [{"kind": "fall", "t_onset": float(ev.get("t_onset", ev["t"]))} for ev in session["events"]
+              if ev["kind"] == "possible_fall"]
+    ends = [e["t"] for e in session["estimates"]] + [e["t"] for e in session["events"]]
+    res = {"start_time": session["started_at"], "duration_s": max(ends, default=0.0), "events": events,
+           key: {"windows": wins, "window_s": span}}
+    tzinfo = timezone(timedelta(minutes=float(session["tz_offset_min"])))
+    return {"results": res, "start_ts": start.timestamp(), "name": name or f"web-{metric}", "tzinfo": tzinfo}

@@ -255,7 +255,8 @@ class BreathSoundRate:
     def _emit(self, t: float) -> dict:
         p = self.p
         out = {"t": t, "bpm": None, "quality": 0.0, "reported": False, "reason": "ok", "snr": None,
-               "bumps": None, "alt": None, "range_log10": None, "clip_frac": None, "speech_frac": None}
+               "bumps": None, "alt": None, "range_log10": None, "clip_frac": None, "speech_frac": None,
+               "span_s": None}
         if self._no_mic:
             out["reason"] = "no_mic"
             return out
@@ -264,6 +265,7 @@ class BreathSoundRate:
             out["reason"] = "settling"
             return out
         y = np.fromiter(self._env, dtype=np.float64, count=n)
+        out["span_s"] = n / self.env_fs   # analysed window length (s)
         out["clip_frac"] = float(np.mean(np.fromiter(self._clip, dtype=np.float64, count=n)))
         out["range_log10"] = percentile(y, 95.0) - percentile(y, 5.0)
         while self._speech and self._speech[0][0] <= t - p.window_s:

@@ -169,7 +169,7 @@ def analyze_window(ts, rs, gs, p: ContactPpg = PARAMS.contact_ppg) -> dict:
         f_ibi = 60000.0 / med
     bpm = 60.0 * f_spec
     delta = None if f_ibi is None else bpm - f_ibi
-    return {"gaps": False, "channel": best["channel"], "bpm": bpm, "bpm_ibi": f_ibi, "snr": best["snr"],
+    return {"gaps": False, "span_s": w, "channel": best["channel"], "bpm": bpm, "bpm_ibi": f_ibi, "snr": best["snr"],
             "pi": pi, "delta": delta, "ibis_ms": ibis, "quality": quality_score(best["snr"], delta, pi, p)}
 
 
@@ -177,7 +177,7 @@ def analyze_window(ts, rs, gs, p: ContactPpg = PARAMS.contact_ppg) -> dict:
 
 class ContactPPG:
     """Feed frames with ``update(t, r, g, b, clip_frac)``; returns an output dict once per ``step_s``
-    (else None): ``{t, bpm, bpm_ibi, quality, reported, reason, snr, pi, channel, contact_epoch}`` (full precision; round in the UI only). ``contact_epoch`` counts contact
+    (else None): ``{t, bpm, bpm_ibi, quality, reported, reason, snr, pi, channel, contact_epoch, span_s}`` (``span_s`` = analysed window length, None when no window was analysed) (full precision; round in the UI only). ``contact_epoch`` counts contact
     restarts (a UI measurement must restart when it changes). ``bpm`` /
     ``bpm_ibi`` are filled whenever a window was analysed, but only ``reported`` outputs may be shown."""
 
@@ -234,7 +234,7 @@ class ContactPPG:
     def _emit(self, t: float) -> dict:
         out = {"t": t, "bpm": None, "bpm_ibi": None, "quality": 0.0, "reported": False,
                "reason": "ok", "snr": None, "pi": None, "channel": None,
-               "contact_epoch": self._epoch}
+               "contact_epoch": self._epoch, "span_s": None}
         if self._state != "ok":
             out["reason"] = self._state
             return out
@@ -248,7 +248,7 @@ class ContactPPG:
         p = self.p
         self.last_ibis_ms = a["ibis_ms"]
         out.update(bpm=a["bpm"], bpm_ibi=a["bpm_ibi"],
-                   quality=a["quality"], snr=a["snr"], pi=a["pi"], channel=a["channel"])
+                   quality=a["quality"], snr=a["snr"], pi=a["pi"], channel=a["channel"], span_s=a["span_s"])
         if a["snr"] < p.min_snr or not (p.pi_min <= a["pi"] <= p.pi_max) or a["delta"] is None:
             out["reason"] = "low_signal"
         elif abs(a["delta"]) > p.agree_bpm:
