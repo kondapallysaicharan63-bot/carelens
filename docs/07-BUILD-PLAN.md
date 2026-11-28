@@ -9,6 +9,10 @@ at a time, keeping `pytest -q` green after every task. Don't batch unrelated cha
 
 ---
 
+> **Track change (2026-11-28):** the **main track is now the website** — see
+> [`10-WEB-PLAN.md`](10-WEB-PLAN.md) (tasks W0–W11). The phases below (P2.7+, P3) are the
+> **Jetson / edge track**, to be resumed later if time and hardware allow.
+
 ## P0 — Skeleton (DONE)
 
 Built and passing 23 tests on synthetic data:

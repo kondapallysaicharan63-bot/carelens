@@ -9,7 +9,8 @@ device** and must never claim to be.
 - `dashboard/` — local Flask UI.
 - `tests/` — pytest suite.
 - `docs/` — the spec set. **Read `docs/07-BUILD-PLAN.md` to know what to do next.**
-  P0 and P1 are built; next is **P2**.
+  P0, P1 and the hardware-free P2 work are built. **Main track is now the website:**
+  `docs/10-WEB-PLAN.md` (W0–W11). The Jetson/edge phases in 07 are a later track.
 
 ## How to work
 0. **Orchestrate, don't do everything yourself.** This session is the *coordinator*: dispatch
