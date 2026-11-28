@@ -52,6 +52,27 @@ def test_example_is_valid_and_json_schema_enums_match_validator():
     assert set(SCHEMA["properties"]) == set(ws._TOP) | set(ws._OPTIONAL_TOP)
     assert set(d["estimate"]["required"]) == set(ws._EST_REQ)
     assert set(d["event"]["properties"]) == set(ws._EV_ALL)
+    assert tuple(d["summary"]["properties"]["kind"]["enum"]) == ws.SUMMARY_KINDS
+    assert set(d["summary"]["required"]) == set(ws._SUM_REQ)
+    assert set(d["summary"]["properties"]) == set(ws._SUM_ALL)
+
+
+def test_summaries_are_optional_and_validated():
+    s = _good()
+    assert "summaries" in s and ws.validate(s) == []
+    del s["summaries"]
+    assert ws.validate(s) == []   # older exports have none
+    for mut in (lambda r: r.update(kind="stress"), lambda r: r.update(rmssd_ms=-1), lambda r: r.update(kept_frac=1.5),
+                lambda r: r.update(n_kept=2.5), lambda r: r.update(foo=1), lambda r: r.pop("sdnn_ms"),
+                lambda r: r.pop("reason"), lambda r: r.update(reported="yes")):
+        s = _good()
+        mut(s["summaries"][0])
+        assert ws.validate(s), mut
+    s = _good()
+    s["summaries"][0].update(reported=False, reason="too_short")
+    for k in ("rmssd_ms", "sdnn_ms", "mean_hr_bpm"):
+        s["summaries"][0].pop(k)
+    assert ws.validate(s) == []   # a withheld result carries no numbers
 
 
 @pytest.mark.parametrize("mutate,needle", [

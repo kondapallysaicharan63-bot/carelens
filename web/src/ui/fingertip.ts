@@ -6,12 +6,16 @@ import params from '../../../shared/params.json';
 import { ContactPPG, assertContactPpgParams, type ContactPpgParams, type PpgReason, type PpgUpdate } from '../core/ppg';
 import { FrameClock, RoiSampler } from '../capture/ppgSampler';
 import type { FrameMeta } from '../capture/frames';
+import { HRV_NOTE, buildHrvCard, type HrvCard } from './hrvCard';
+import { assertHrvParams, hrvResult, type HrvParams, type HrvResult } from '../core/hrv';
 import { el } from './dom';
 
 export const PPG_PARAMS = assertContactPpgParams(params.contact_ppg as ContactPpgParams);
+export const HRV_PARAMS = assertHrvParams(params.hrv as HrvParams);
 export const MEASURE_S = 30;
 export const MIN_REPORTED_FOR_RESULT = 5;
 
+export { HRV_NOTE };
 export const INSTRUCTIONS =
   'Cover the back camera and flash with your fingertip; rest your hand; hold still for 30 s.';
 export const LAPTOP_NOTE =
@@ -98,15 +102,20 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 export interface FingertipHooks {
   onUpdate(u: PpgUpdate, m: MeasurementState, settleLeftS: number): void;
   onWave(points: string): void;
+  /** every update: `result` is null until the post-settling segment has lasted hrv.min_duration_s; `last` is the last reported result (any epoch) */
+  onHrv?(result: HrvResult | null, segmentS: number, epoch: number, last: HrvResult | null): void;
 }
 
 /** Owns the sampler, clock, core and measurement for one capture. end() is safe at any time. */
 export class FingertipSession {
-  private readonly core = new ContactPPG(PPG_PARAMS);
+  private readonly core = new ContactPPG(PPG_PARAMS, HRV_PARAMS);
   private readonly sampler = new RoiSampler();
   private readonly clock = new FrameClock();
   private readonly meas = new MeasurementTracker();
   private stop: (() => void) | null = null;
+  private hrvKey = '';
+  private hrvCache: HrvResult | null = null;
+  private lastReported: HrvResult | null = null;
   private wave: number[] = [];
   private lastDraw = 0;
 
@@ -124,7 +133,7 @@ export class FingertipSession {
 
   /** Re-arm after a stream swap (clock and measurement start fresh). */
   restart(video: HTMLVideoElement): void {
-    this.core.reset(); this.meas.reset(); this.wave = [];
+    this.core.reset(); this.meas.reset(); this.wave = []; this.hrvKey = ''; this.hrvCache = null; this.lastReported = null;
     this.start(video);
   }
 
@@ -148,11 +157,26 @@ export class FingertipSession {
     if (!u) return;
     const m = this.meas.push(u);
     this.hooks.onUpdate(u, m, PPG_PARAMS.settle_s - this.core.contactSeconds(t));
+    if (this.hooks.onHrv) {
+      const segS = this.core.segmentSeconds();
+      let res: HrvResult | null = null;
+      if (segS >= HRV_PARAMS.min_duration_s) {
+        // recomputed (one ~4k-point FFT + beat search) only when the segment changed; a frozen segment returns the same object
+        const seg = this.core.segment();
+        const key = `${u.contact_epoch}:${seg.t.length}:${seg.nUpd}:${seg.nOk}`;
+        if (key !== this.hrvKey) { this.hrvKey = key; this.hrvCache = hrvResult(this.core, PPG_PARAMS, HRV_PARAMS); }
+        res = this.hrvCache;
+      }
+      if (res?.reported) this.lastReported = res;
+      this.hooks.onHrv(res, segS, u.contact_epoch, this.lastReported);
+    }
   }
 }
 
 export interface FingertipView {
   root: HTMLElement;
+  /** the Experimental section with the HRV card (fingertip mode only) */
+  hrvRoot: HTMLElement;
   video: HTMLVideoElement;
   status: HTMLElement;
   setNoTorchNote(show: boolean): void;
@@ -204,7 +228,9 @@ export function buildFingertipView(
     result,
     el('p', { class: 'note' }, 'A wellbeing trend from the camera, not a medical measurement. Nothing leaves this device.'),
   );
+  const hrvCard: HrvCard = buildHrvCard(HRV_PARAMS.min_duration_s);
   const hooks: FingertipHooks = {
+    onHrv: (res, segS, _epoch, last) => hrvCard.update(res, segS, last),
     onWave: (points) => poly.setAttribute('points', points),
     onUpdate(u, m, settleLeft) {
       if (u.reported && u.bpm !== null) {
@@ -227,5 +253,5 @@ export function buildFingertipView(
       }
     },
   };
-  return { root, video, status, setNoTorchNote: (show) => { noTorch.hidden = !show; }, hooks };
+  return { root, hrvRoot: hrvCard.section, video, status, setNoTorchNote: (show) => { noTorch.hidden = !show; }, hooks };
 }

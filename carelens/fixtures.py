@@ -26,6 +26,7 @@ from .events import FallDetector, InactivityDetector
 from .features import FeatureExtractor
 from .tracking import PresenceTracker
 from .params import PARAMS
+from .hrv import run_hrv, synth_rr, truth_hrv, with_ectopics, without_beats
 from .ppg import run_contact_ppg, synth_trace
 from .rppg import run_face_rppg, synth_face_trace
 from .synth import ASPECT, Scenario, Segment
@@ -160,6 +161,7 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "landmarks": run_landmarks,
     "pose_chain": run_pose_chain,
     "ppg_contact": run_contact_ppg,
+    "ppg_hrv": run_hrv,
     "face_rppg": run_face_rppg,
     "audio_envelope": AU.run_audio_envelope,
     "audio_breath_env": AU.run_breath_env,
@@ -170,6 +172,7 @@ TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact
               "estimate_count": "exact"}
 TOL_PPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01,
            "reported": "exact", "reason": "exact", "update_count": "exact"}
+TOL_HRV = {"hrv_ms": 0.5, "bpm": 0.3, "reported": "exact", "reason": "exact"}
 TOL_RPPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
             "reported": "exact", "reason": "exact", "update_count": "exact"}
 TOL_AUDIO_ENV = {"env_log10": 1e-4, "reported": "exact"}
@@ -260,6 +263,20 @@ def _ppg(name, desc, dur=40.0, bpm=72.0, seed=0, **kw):
     inp = {k: [round(v, 4) for v in tr[k]] for k in ("t", "r", "g", "b", "clip_frac")}
     inp["truth_bpm"] = bpm
     return _fixture(name, desc, "ppg_contact", inp, TOL_PPG)
+
+
+def _hrv(name, desc, dur, rmssd, seed, ectopic=(), missed=(), noise=0.05):
+    """Fingertip trace whose beats follow a known RR series (true RMSSD ``rmssd`` ms); ``ectopic`` / ``missed`` are beat indices."""
+    bt = synth_rr(dur + 10, rmssd, seed=seed)
+    t_rmssd, t_sdnn = truth_hrv(np.diff(bt) * 1000.0)
+    if ectopic:
+        bt = with_ectopics(bt, ectopic)
+    if missed:
+        bt = without_beats(bt, missed)
+    tr = synth_trace(dur, beat_times=bt, seed=seed, noise=noise)
+    inp = {k: [round(v, 4) for v in tr[k]] for k in ("t", "r", "g", "b", "clip_frac")}
+    inp["truth_rmssd_ms"], inp["truth_sdnn_ms"] = round(t_rmssd, 3), round(t_sdnn, 3)
+    return _fixture(name, desc, "ppg_hrv", inp, TOL_HRV)
 
 
 def _rppg(name, desc, dur=32.0, bpm=72.0, seed=0, skin="medium", **kw):
@@ -422,6 +439,13 @@ def generate_all() -> dict[str, str]:
              55, 72, 107, events=[(20.0, 28.0, "lift")]),
         _ppg("ppg_harmonic_trap", "52 bpm with a 2nd harmonic nearly as strong as the fundamental: fundamental wins.",
              40, 52, 52, harmonic=0.5, amp=2.0),
+        _hrv("hrv_clean_30ms", "Fingertip trace, 70 s, beats follow an RR series with true RMSSD 30 ms: reported.", 70, 30, 301),
+        _hrv("hrv_clean_80ms", "70 s, true RMSSD 80 ms (high RSA): reported.", 70, 80, 302),
+        _hrv("hrv_ectopics", "70 s, true RMSSD 30 ms, 2 premature beats and 2 missed beats: rejected, still reported.",
+             70, 30, 303, ectopic=(12, 45), missed=(25, 62)),
+        _hrv("hrv_too_many_artifacts", "70 s, 9 premature beats: fewer than 90 % of IBIs kept, withheld.",
+             70, 30, 304, ectopic=(8, 17, 26, 35, 44, 53, 62, 71, 78)),
+        _hrv("hrv_too_short", "50 s of contact: withheld as too_short.", 50, 30, 305),
         _rppg("rppg_clean_light_72bpm", "Face-ROI mean RGB (30 fps), synthetic light-skin profile, 72 bpm, clean.",
               32, 72, 201, "light"),
         _rppg("rppg_clean_medium_90bpm", "Synthetic medium-skin profile, 90 bpm, clean.", 32, 90, 202, "medium"),
@@ -453,9 +477,9 @@ def generate_all() -> dict[str, str]:
 
 _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": "event_time_s",
              "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
-             "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi",
+             "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "rmssd_ms": "hrv_ms", "sdnn_ms": "hrv_ms", "mean_hr_bpm": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi",
              "envelope": "env_log10"}
-_TOL_DEFAULTS = {"bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
+_TOL_DEFAULTS = {"hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
                  "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 

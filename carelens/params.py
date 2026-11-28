@@ -227,6 +227,45 @@ class ContactPpg(_M):
         return self
 
 
+def hrv_errors(p: dict) -> List[str]:
+    """Consistency checks for ``hrv`` (mirrored by hrvErrors in web/src/core/hrv.ts)."""
+    e: List[str] = []
+    if not 0 < p["ibi_min_ms"] < p["ibi_max_ms"]:
+        e.append("need 0 < ibi_min_ms < ibi_max_ms")
+    if not 0 < p["min_duration_s"] <= p["max_duration_s"]:
+        e.append("need 0 < min_duration_s <= max_duration_s")
+    for k in ("min_rate_hz", "max_dev_frac"):
+        if not p[k] > 0:
+            e.append(f"{k} must be > 0")
+    for k in ("min_kept_frac", "min_ok_frac", "min_amp_frac"):
+        if not 0 < p[k] <= 1:
+            e.append(f"{k} must be in (0, 1]")
+    if p["neighbours"] < 1 or p["min_kept_beats"] < 2:
+        e.append("neighbours must be >= 1 and min_kept_beats >= 2")
+    return e
+
+
+class Hrv(_M):
+    min_duration_s: float
+    max_duration_s: float
+    min_rate_hz: float
+    ibi_min_ms: float
+    ibi_max_ms: float
+    neighbours: int
+    max_dev_frac: float
+    min_kept_frac: float
+    min_kept_beats: int
+    min_ok_frac: float
+    min_amp_frac: float
+
+    @model_validator(mode="after")
+    def _check(self) -> "Hrv":
+        errs = hrv_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
 def rppg_errors(p: dict) -> List[str]:
     """Consistency checks for ``rppg`` (mirrored by rppgErrors in web/src/core/rppg.ts)."""
     e: List[str] = []
@@ -430,6 +469,7 @@ class Params(_M):
     scheduling: Scheduling
     chest_shift: ChestShift
     contact_ppg: ContactPpg
+    hrv: Hrv
     rppg: Rppg
     breathing_signal: BandReserved
     tremor: BandReserved

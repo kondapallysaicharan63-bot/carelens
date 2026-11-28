@@ -52,6 +52,21 @@ Public fall datasets used (name + license): ____
 
 - Mean absolute error: ____ /min · reference method used: ____
 
+## 4b. Heart-rate variability (fingertip, Experimental)
+
+Reference: Apple Watch / ECG HRV export (SDNN) or a chest strap (RMSSD). Only measurements of 60 s or longer
+that the website reported (`summaries[]` in the session export, kind `hrv`).
+
+| Session | Camera RMSSD (ms) | Camera SDNN (ms) | Reference RMSSD / SDNN (ms) | Kept beats % | Error RMSSD / SDNN |
+|---|---|---|---|---|---|
+| | | | | | |
+
+- **Bias (mean camera minus reference): RMSSD ____ ms, SDNN ____ ms** · 95 % limits of agreement: ____ to ____ ms
+- Expected direction: camera timing noise at ~30 fps inflates RMSSD (synthetic tests: about +3 to +13 ms), so a positive bias is
+  expected and must be reported, not corrected away. Apple Watch SDNN is a different window and method: compare trends only.
+- Measurements withheld (`too_short`, `low_fps`, `unsteady`, `too_many_artifacts`, `collecting`): __ of __
+- Not a stress or health score and not for diagnosis.
+
 ## 5. Gait (trend, approximate)
 
 | Clip | Speed (m/s, approx) | Trunk sway (°) | Notes |

@@ -8,11 +8,23 @@ import { LabelEventTracker, detectLabelEvents } from '../src/core/audio';
 import { CSV_HEADER, MAX_PER_METRIC, SessionRecorder, estimatesCsv, isoWithOffset, uaFamily } from '../src/export/recorder';
 import type { PoseView } from '../src/capture/poseSession';
 import { clearLocalPrefs } from '../src/export/saved';
-import { EVENT_KINDS, METRICS, MODES, UA_FAMILIES, validateSession } from '../src/export/schema';
+import { EVENT_KINDS, METRICS, MODES, SUMMARY_KINDS, UA_FAMILIES, validateSession } from '../src/export/schema';
 import { summaryLine } from '../src/ui/exportPanel';
 
 const schema = JSON.parse(readFileSync('../shared/session.schema.json', 'utf8'));
 const example = () => JSON.parse(readFileSync('../shared/session.example.json', 'utf8'));
+
+describe('session summaries (HRV)', () => {
+  const mod = (f: (s: any) => void) => { const s = JSON.parse(readFileSync('../shared/session.example.json', 'utf8')); f(s); return validateSession(s); };
+  it('are optional and validated', () => {
+    expect(mod((s) => delete s.summaries)).toEqual([]);
+    for (const f of [(r: any) => (r.kind = 'stress'), (r: any) => (r.rmssd_ms = -1), (r: any) => (r.kept_frac = 1.5), (r: any) => (r.n_kept = 2.5),
+      (r: any) => (r.foo = 1), (r: any) => delete r.sdnn_ms, (r: any) => delete r.reason, (r: any) => (r.reported = 'yes')]) {
+      expect(mod((s) => f(s.summaries[0])), String(f)).not.toEqual([]);
+    }
+    expect(mod((s) => { Object.assign(s.summaries[0], { reported: false, reason: 'too_short' }); for (const k of ['rmssd_ms', 'sdnn_ms', 'mean_hr_bpm']) delete s.summaries[0][k]; })).toEqual([]);
+  });
+});
 
 describe('session schema validator', () => {
   it('accepts the shared example and matches the JSON schema file', () => {
@@ -20,6 +32,8 @@ describe('session schema validator', () => {
     expect(schema.$defs.estimate.properties.metric.enum).toEqual([...METRICS]);
     expect(schema.$defs.event.properties.kind.enum).toEqual([...EVENT_KINDS]);
     expect(schema.properties.modes.items.enum).toEqual([...MODES]);
+    expect(schema.$defs.summary.properties.kind.enum).toEqual([...SUMMARY_KINDS]);
+    expect(Object.keys(schema.$defs.summary.properties).sort()).toEqual(['duration_s', 'kept_frac', 'kind', 'mean_hr_bpm', 'n_beats', 'n_kept', 'reason', 'reported', 'rmssd_ms', 'sdnn_ms', 't', 'wall']);
     expect(schema.properties.device.properties.user_agent_family.enum).toEqual([...UA_FAMILIES]);
   });
   const bad: [string, (s: any) => void, string][] = [

@@ -9,7 +9,9 @@ import { createFaceLandmarker } from '../capture/face';
 import { openStreamWithFallback, stopStream } from '../capture/session';
 import { safeGet, safeRemove, safeSet } from '../storage';
 import { makeCard, TIER1, TIER2, type Card } from './cards';
-import { buildFingertipView, FingertipSession } from './fingertip';
+import { buildFingertipView, FingertipSession, HRV_PARAMS } from './fingertip';
+import { HRV_NOTE, HRV_OFF_TEXT } from './hrvCard';
+import { HrvRecorder } from '../export/hrv';
 import { buildFaceCard, FaceHrSession, type FaceCard } from './faceHr';
 import { qualityMeter } from './quality';
 import { buildPoseCards, type PoseCards } from './poseCards';
@@ -176,7 +178,7 @@ export function mountApp(root: HTMLElement): void {
     r.append(grid);
     const e = el('section', { class: 'results experimental', 'aria-labelledby': 'h-exp' }, el('h2', { id: 'h-exp' }, 'Experimental'), el('p', { class: 'sub' }, 'Tier 2: early, less reliable features. Treat as curiosity, not information.'));
     const g2 = el('div', { class: 'grid' });
-    for (const [t, n] of TIER2) g2.append(makeCard(t, 2, n).root);
+    for (const [t, n] of TIER2) g2.append(t === 'Heart-rate variability' ? makeCard(t, 2, HRV_NOTE, HRV_OFF_TEXT).root : makeCard(t, 2, n).root);
     e.append(g2);
     wrap.append(r, e);
     return wrap;
@@ -420,8 +422,13 @@ export function mountApp(root: HTMLElement): void {
     const rec = startRecorder(['fingertip']);
     const view = buildFingertipView(qualityMeter);
     const vh = view.hooks;
+    const hrvRec = new HrvRecorder(rec, HRV_PARAMS.min_duration_s);
     view.hooks = {
       ...vh,
+      onHrv(res, segS, epoch, last) {
+        vh.onHrv?.(res, segS, epoch, last);
+        if (res) hrvRec.update(epoch, res);
+      },
       onUpdate(u, m, settleLeft) {
         vh.onUpdate(u, m, settleLeft);
         rec.addEstimate({ metric: 'hr_fingertip', value: u.bpm, quality: u.quality, reported: u.reported && u.bpm !== null, reason: u.reason, span_s: u.span_s });
@@ -430,7 +437,7 @@ export function mountApp(root: HTMLElement): void {
     const stopBtn = el('button', { type: 'button', class: 'btn', id: 'fp-stop' }, 'Stop');
     stopBtn.addEventListener('click', () => showConsent());
     view.root.append(el('div', { class: 'btnrow' }, stopBtn));
-    main.replaceChildren(view.root, dataPanel.root, notOffered);
+    main.replaceChildren(view.root, view.hrvRoot, dataPanel.root, notOffered);
     let opened: MediaStream;
     try {
       // Prefer the back camera (a stale remembered deviceId from the standard mode is ignored here).

@@ -23,10 +23,13 @@ DEFAULT_SPAN_S = {"hr_fingertip": 10.0, "hr_face": 12.0, "br_camera": 30.0, "br_
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 _TOP = ("schema_version", "app_version", "params_version", "started_at", "tz_offset_min", "device", "modes",
         "estimates", "events", "disclaimer")
-_OPTIONAL_TOP = ("truncated",)
+_OPTIONAL_TOP = ("truncated", "summaries")
 _EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
 _EV_REQ = ("t", "wall", "kind")
 _EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
+SUMMARY_KINDS = ("hrv",)
+_SUM_REQ = ("t", "wall", "kind", "reported", "reason")
+_SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s")
 
 
 class SessionError(ValueError):
@@ -105,7 +108,7 @@ def validate(x) -> list[str]:
         m = x["modes"]
         if not (isinstance(m, list) and all(isinstance(i, str) and i in MODES for i in m) and len(set(m)) == len(m)):
             errs.append(f"modes: expected unique items from {'|'.join(MODES)}")
-    for key, check in (("estimates", _estimate_errors), ("events", _event_errors)):
+    for key, check in (("estimates", _estimate_errors), ("events", _event_errors), ("summaries", _summary_errors)):
         if key in x:
             if not isinstance(x[key], list):
                 errs.append(f"{key}: must be an array")
@@ -160,6 +163,37 @@ def _event_errors(e, w: str, errs: list) -> None:
         errs.append(f"{w}.peak_score: expected a number in [0, 1]")
     if "trigger" in e and not (isinstance(e["trigger"], str) and len(e["trigger"]) <= 40):
         errs.append(f"{w}.trigger: expected a string up to 40 characters")
+
+
+def _summary_errors(e, w: str, errs: list) -> None:
+    """``summaries[]``: whole-measurement results (W6 HRV). Optional top-level array; absent in older exports."""
+    if not isinstance(e, dict):
+        errs.append(f"{w}: must be an object")
+        return
+    errs += [f"{w}: missing {k!r}" for k in _SUM_REQ if k not in e]
+    _extra(e, _SUM_ALL, w, errs)
+    if "t" in e and not (_num(e["t"]) and e["t"] >= 0):
+        errs.append(f"{w}.t: expected a number >= 0")
+    if "wall" in e and not _iso(e["wall"]):
+        errs.append(f"{w}.wall: expected ISO 8601 with a UTC offset")
+    if "kind" in e and e["kind"] not in SUMMARY_KINDS:
+        errs.append(f"{w}.kind: expected one of {'|'.join(SUMMARY_KINDS)}")
+    if "reported" in e and not isinstance(e["reported"], bool):
+        errs.append(f"{w}.reported: expected a boolean")
+    if "reason" in e and not (isinstance(e["reason"], str) and len(e["reason"]) <= 40):
+        errs.append(f"{w}.reason: expected a string up to 40 characters")
+    for k in ("rmssd_ms", "sdnn_ms", "duration_s"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
+    if "mean_hr_bpm" in e and not (_num(e["mean_hr_bpm"]) and e["mean_hr_bpm"] > 0):
+        errs.append(f"{w}.mean_hr_bpm: expected a number > 0")
+    for k in ("n_beats", "n_kept"):
+        if k in e and not (_int(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected an integer >= 0")
+    if "kept_frac" in e and not (_num(e["kept_frac"]) and 0 <= e["kept_frac"] <= 1):
+        errs.append(f"{w}.kept_frac: expected a number in [0, 1]")
+    if e.get("reported") is True and not (_num(e.get("rmssd_ms")) and _num(e.get("sdnn_ms"))):
+        errs.append(f"{w}: reported rows need rmssd_ms and sdnn_ms")
 
 
 def load_session(path) -> dict:

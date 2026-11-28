@@ -54,7 +54,7 @@ import numpy as np
 
 from .dsp import (_EPS, band_bins, bandpass, detrend_relative, fft_size, grid_times, hann,  # noqa: F401 (re-exported)
                   parabolic_lin, parabolic_log, percentile, power_spectrum, spectral_peak, spectral_snr, taper)
-from .params import PARAMS, ContactPpg
+from .params import PARAMS, ContactPpg, Hrv
 
 REASONS = ("ok", "no_finger", "saturated", "settling", "low_signal", "disagree", "gaps")
 
@@ -181,8 +181,9 @@ class ContactPPG:
     restarts (a UI measurement must restart when it changes). ``bpm`` /
     ``bpm_ibi`` are filled whenever a window was analysed, but only ``reported`` outputs may be shown."""
 
-    def __init__(self, params: ContactPpg = PARAMS.contact_ppg):
+    def __init__(self, params: ContactPpg = PARAMS.contact_ppg, hrv: Optional[Hrv] = None):
         self.p = params
+        self.hrv_p = hrv   # None: do not record the contact segment (W6 HRV off)
         self.last_ibis_ms: list[float] = []   # IBIs of the most recent analysed window (W6 HRV)
         self.reset()
 
@@ -197,9 +198,23 @@ class ContactPPG:
         self._next_out: Optional[float] = None
         self._last_t: Optional[float] = None
         self.last_ibis_ms = []
+        self._reset_segment()
+
+    def _reset_segment(self) -> None:
+        # raw samples of the current contact epoch AFTER settling (W6 HRV), frozen at hrv.max_duration_s
+        self._seg_t: list = []
+        self._seg_r: list = []
+        self._seg_g: list = []
+        self._seg_upd = 0   # 1 s updates since settling ended (current epoch)
+        self._seg_ok = 0    # ... of which reported "ok"
+
+    def segment(self) -> tuple:
+        """``(t, r, g, n_updates, n_ok)`` of the current contact epoch (W6 HRV input)."""
+        return self._seg_t, self._seg_r, self._seg_g, self._seg_upd, self._seg_ok
 
     def _clear(self, t: float, r: float, state: str) -> None:
         self._t.clear(); self._r.clear(); self._g.clear()
+        self._reset_segment()
         self._contact_since = None
         self._prev_r = r
         self._state = state
@@ -223,6 +238,9 @@ class ContactPPG:
                 self._contact_since = t
                 self._epoch += 1
             self._t.append(t); self._r.append(r); self._g.append(g)
+            if self.hrv_p is not None and t - self._contact_since >= p.settle_s \
+                    and (not self._seg_t or t - self._seg_t[0] <= self.hrv_p.max_duration_s):
+                self._seg_t.append(t); self._seg_r.append(r); self._seg_g.append(g)
             while len(self._t) >= 2 and self._t[1] < t - p.window_s:
                 self._t.popleft(); self._r.popleft(); self._g.popleft()
         if t < self._next_out:
@@ -242,6 +260,9 @@ class ContactPPG:
             out["reason"] = "settling"
             return out
         a = analyze_window(self._t, self._r, self._g, self.p)
+        counting = self.hrv_p is not None and bool(self._seg_t) and t - self._seg_t[0] <= self.hrv_p.max_duration_s
+        if counting:
+            self._seg_upd += 1
         if a["gaps"]:
             out["reason"] = "gaps"
             return out
@@ -249,13 +270,18 @@ class ContactPPG:
         self.last_ibis_ms = a["ibis_ms"]
         out.update(bpm=a["bpm"], bpm_ibi=a["bpm_ibi"],
                    quality=a["quality"], snr=a["snr"], pi=a["pi"], channel=a["channel"], span_s=a["span_s"])
-        if a["snr"] < p.min_snr or not (p.pi_min <= a["pi"] <= p.pi_max) or a["delta"] is None:
+        pi_ok = p.pi_min <= a["pi"] <= p.pi_max
+        if counting and a["snr"] < p.min_snr and pi_ok and a["delta"] is not None and abs(a["delta"]) <= p.agree_bpm:
+            self._seg_ok += 1   # steady for HRV: every W1 gate passed except SNR (HRV itself broadens the spectral peak)
+        if a["snr"] < p.min_snr or not pi_ok or a["delta"] is None:
             out["reason"] = "low_signal"
         elif abs(a["delta"]) > p.agree_bpm:
             out["reason"] = "disagree"
         else:
             out["reason"] = "ok"
             out["reported"] = True
+            if counting:
+                self._seg_ok += 1
         return out
 
 

@@ -67,6 +67,50 @@ export function writeFingertipY4m(name = 'fingertip-72bpm.y4m', bpm = 72, second
   return path;
 }
 
+/**
+ * Beat times (s) of a known RR series: mean 850 ms, respiratory sinus arrhythmia (0.25 Hz sinusoid, 70 % of the variance)
+ * plus AR(1) noise, scaled so the TRUE RMSSD equals `rmssdMs`. Returns the beats and the true RMSSD / SDNN (ms).
+ */
+export function rrSeries(seconds: number, rmssdMs: number, seed = 7, meanMs = 850): { beats: number[]; rmssd: number; sdnn: number } {
+  const r = rng(seed);
+  const n = Math.floor((seconds * 1000) / meanMs) + 8;
+  const ph = 2 * Math.PI * r();
+  let e = 0;
+  const es: number[] = [], rsa: number[] = [];
+  for (let k = 0; k < n; k++) { e = k === 0 ? normal(r) : 0.6 * e + normal(r); es.push(e); rsa.push(Math.sin(2 * Math.PI * 0.25 * k * (meanMs / 1000) + ph)); }
+  const sd = (v: number[]): number => { const m = v.reduce((a, b) => a + b, 0) / v.length; return Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); };
+  const mu = (v: number[]): number => v.reduce((a, b) => a + b, 0) / v.length;
+  const se = sd(es), sr = sd(rsa), me = mu(es), mr = mu(rsa);
+  const dev = es.map((x, i) => Math.sqrt(0.7) * ((rsa[i]! - mr) / sr) + Math.sqrt(0.3) * ((x - me) / se));
+  const md = mu(dev);
+  const d0 = dev.map((x) => x - md);
+  const rmssd0 = Math.sqrt(mu(d0.slice(1).map((x, i) => (x - d0[i]!) ** 2)));
+  const rr = d0.map((x) => meanMs + (rmssdMs / rmssd0) * x);
+  const beats = [-r() * 0.5];
+  for (const x of rr) beats.push(beats[beats.length - 1]! + x / 1000);
+  const sdnn = Math.sqrt(rr.reduce((a, b) => a + (b - mu(rr)) ** 2, 0) / (rr.length - 1));
+  return { beats, rmssd: rmssdMs, sdnn };
+}
+
+/**
+ * Fingertip clip whose pulse follows a KNOWN RR series (see rrSeries): each beat is a systolic peak plus a smaller dicrotic
+ * bump (the same template as carelens.ppg), R ~ 200 with ~8 counts peak to peak, G ~ 50, per-pixel noise. `seconds` is long
+ * enough that the clip does not loop during the test (a loop would put a phase jump in the beat series).
+ */
+export function writeFingertipRrY4m(name: string, rmssdMs: number, seconds = 100, fps = 30, w = 80, h = 60): { path: string; rmssd: number; sdnn: number } {
+  const { beats, rmssd, sdnn } = rrSeries(seconds + 10, rmssdMs);
+  const path = join(TMP, name);
+  const pulse = (tau: number): number => Math.exp(-0.5 * ((tau - 0.18) / 0.09) ** 2) + 0.4 * Math.exp(-0.5 * ((tau - 0.45) / 0.12) ** 2);
+  const wave = new Float64Array(Math.round(seconds * fps));
+  for (let f = 0; f < wave.length; f++) {
+    let v = 0;
+    for (const b0 of beats) { const tau = f / fps - b0; if (tau >= 0 && tau < 1.2) v += pulse(tau); }
+    wave[f] = v / 1.4 - 0.25;
+  }
+  writeY4m(path, w, h, fps, wave.length, (f, rnd) => [200 + 8 * wave[f]! + 3 * normal(rnd), 50 + 1.0 * wave[f]! + 2 * normal(rnd), 40 + 2 * normal(rnd)]);
+  return { path, rmssd, sdnn };
+}
+
 /** Plain mid-grey 4:3 clip with faint noise (a camera that sees "something"); used when the pose model is scripted. */
 export function writeGreyY4m(name = 'grey.y4m', seconds = 4, fps = 15, w = 160, h = 120): string {
   const path = join(TMP, name);

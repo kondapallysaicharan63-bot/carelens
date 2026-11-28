@@ -5,7 +5,7 @@ import params from '../../../shared/params.json';
 import pkg from '../../package.json';
 import { DISCLAIMER } from '../ui/consent';
 import {
-  SCHEMA_VERSION, type EstimateRow, type EventRow, type Metric, type Mode, type SessionExport, type UaFamily,
+  SCHEMA_VERSION, type EstimateRow, type EventRow, type Metric, type Mode, type SessionExport, type SummaryRow, type UaFamily,
 } from './schema';
 
 export const APP_VERSION: string = pkg.version;
@@ -13,6 +13,7 @@ export const APP_VERSION: string = pkg.version;
  *  When any cap is hit later rows are dropped, `truncated` is set and the UI says so. */
 export const MAX_PER_METRIC = 90000;
 export const MAX_EVENTS = 10000;
+export const MAX_SUMMARIES = 1000;
 export const LIMIT_TEXT = 'Recording limit reached';
 
 export function uaFamily(ua: string): UaFamily {
@@ -53,6 +54,7 @@ export class SessionRecorder {
   readonly tzOffsetMin: number;
   readonly estimates: EstimateRow[] = [];
   readonly events: EventRow[] = [];
+  readonly summaries: SummaryRow[] = [];
   private endT: number | null = null;
   private readonly perMetric = new Map<Metric, number>();
   /** true once a row cap was hit: later rows were dropped */
@@ -91,6 +93,26 @@ export class SessionRecorder {
     return row;
   }
 
+  /** Whole-measurement result (W6 HRV). Returns the stored row (update it in place with `updateSummary`) or null at the cap. */
+  addSummary(s: { kind: SummaryRow['kind']; reported: boolean; reason: string; rmssd_ms: number | null; sdnn_ms: number | null; mean_hr_bpm: number | null; n_beats: number; n_kept: number; kept_frac: number; duration_s: number }): SummaryRow | null {
+    if (this.summaries.length >= MAX_SUMMARIES) { this.truncated = true; return null; }
+    const t = r3(this.now());
+    const row: SummaryRow = { t, wall: this.wall(t), kind: s.kind, reported: false, reason: '' };
+    this.summaries.push(row);
+    this.updateSummary(row, s);
+    return row;
+  }
+
+  updateSummary(row: SummaryRow, s: { reported: boolean; reason: string; rmssd_ms: number | null; sdnn_ms: number | null; mean_hr_bpm: number | null; n_beats: number; n_kept: number; kept_frac: number; duration_s: number }): void {
+    const ok = s.reported && s.rmssd_ms !== null && s.sdnn_ms !== null;
+    row.t = r3(this.now()); row.wall = this.wall(row.t);
+    row.reported = ok; row.reason = s.reason.slice(0, 40);
+    row.n_beats = s.n_beats; row.n_kept = s.n_kept; row.kept_frac = r3(Math.min(1, Math.max(0, s.kept_frac))); row.duration_s = r3(Math.max(0, s.duration_s));
+    for (const [k, v] of [['rmssd_ms', ok ? s.rmssd_ms : null], ['sdnn_ms', ok ? s.sdnn_ms : null], ['mean_hr_bpm', ok ? s.mean_hr_bpm : null]] as const) {
+      if (v !== null && Number.isFinite(v)) row[k] = r3(v); else delete row[k];
+    }
+  }
+
   /** Update a stored event (a cough that is still going on / merged with the next sound). */
   updateEvent(row: EventRow, patch: { t_end?: number; peak_score?: number }): void {
     if (patch.t_end !== undefined) row.t_end = r3(Math.max(0, patch.t_end));
@@ -99,13 +121,13 @@ export class SessionRecorder {
 
   finish(): void { if (this.endT === null) this.endT = this.now(); }
   get finished(): boolean { return this.endT !== null; }
-  get isEmpty(): boolean { return this.estimates.length === 0 && this.events.length === 0; }
+  get isEmpty(): boolean { return this.estimates.length === 0 && this.events.length === 0 && this.summaries.length === 0; }
 
   toJSON(): SessionExport {
     return {
       schema_version: SCHEMA_VERSION, app_version: APP_VERSION, params_version: params.version, started_at: isoWithOffset(this.startedMs, this.tzOffsetMin),
       tz_offset_min: this.tzOffsetMin, device: { user_agent_family: uaFamily(this.ua) }, modes: [...this.modes],
-      estimates: this.estimates.map((e) => ({ ...e })), events: this.events.map((e) => ({ ...e })), disclaimer: DISCLAIMER, truncated: this.truncated,
+      estimates: this.estimates.map((e) => ({ ...e })), events: this.events.map((e) => ({ ...e })), ...(this.summaries.length ? { summaries: this.summaries.map((e) => ({ ...e })) } : {}), disclaimer: DISCLAIMER, truncated: this.truncated,
     };
   }
 

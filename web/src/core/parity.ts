@@ -4,6 +4,7 @@
 // Not a medical device.
 
 import { runContactPpg } from './ppg';
+import { runHrv } from './hrv';
 import { runFaceRppg } from './rppg';
 import { runPoseFixture } from './pipeline';
 import { BreathingRateEstimator } from './breathing';
@@ -22,6 +23,8 @@ export interface Fixture {
 export type Implementation = (fx: Fixture, params: any) => any;
 
 const ppgContact: Implementation = (fx, params) => runContactPpg(fx.input, params.contact_ppg);
+
+const ppgHrv: Implementation = (fx, params) => runHrv(fx.input, params.contact_ppg, params.hrv);
 
 const faceRppg: Implementation = (fx, params) => runFaceRppg(fx.input, params.rppg);
 
@@ -63,6 +66,11 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   ppg_saturation: ppgContact,
   ppg_finger_lift: ppgContact,
   ppg_harmonic_trap: ppgContact,
+  hrv_clean_30ms: ppgHrv,
+  hrv_clean_80ms: ppgHrv,
+  hrv_ectopics: ppgHrv,
+  hrv_too_many_artifacts: ppgHrv,
+  hrv_too_short: ppgHrv,
   rppg_clean_light_72bpm: faceRppg,
   rppg_clean_medium_90bpm: faceRppg,
   rppg_clean_dark_60bpm: faceRppg,
@@ -93,7 +101,7 @@ const TOL_KEYS: Record<string, [string, number]> = {
   value: ['value_bpm', 0.5], quality: ['quality', 0.05], t: ['t_s', 0.05],
   t_onset: ['event_time_s', 0.1], t_confirmed: ['event_time_s', 0.1],
   torso_angle_deg: ['torso_angle_deg', 0.05], motion: ['motion', 0.01],
-  bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01], envelope: ['env_log10', 1e-4],
+  bpm: ['bpm', 0.3], rmssd_ms: ['hrv_ms', 0.5], sdnn_ms: ['hrv_ms', 0.5], mean_hr_bpm: ['bpm', 0.3], bpm_ibi: ['bpm', 0.3], bpm_chrom: ['bpm', 0.3], final_ibis_ms: ['ibi_ms', 5], snr: ['snr', 0.05], pi: ['pi', 0.01], envelope: ['env_log10', 1e-4],
 };
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 

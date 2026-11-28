@@ -50,7 +50,7 @@ export function buildExportPanel(): ExportPanel {
 
   const sync = (): void => {
     jsonBtn.disabled = csvBtn.disabled = !rec || rec.isEmpty;
-    status.textContent = !rec ? 'No session yet.' : rec.isEmpty ? 'Nothing recorded yet in this session.' : `This session: ${rec.estimates.length} estimates, ${rec.events.length} events (kept in memory only).${rec.truncated ? ' ' + LIMIT_TEXT + ': later rows were not recorded.' : ''}`;
+    status.textContent = !rec ? 'No session yet.' : rec.isEmpty ? 'Nothing recorded yet in this session.' : `This session: ${rec.estimates.length} estimates, ${rec.events.length} events${rec.summaries.length ? `, ${rec.summaries.length} HRV ${rec.summaries.length === 1 ? 'summary' : 'summaries'}` : ''} (kept in memory only).${rec.truncated ? ' ' + LIMIT_TEXT + ': later rows were not recorded.' : ''}`;
   };
   const stamp = (r: SessionRecorder): string => r.toJSON().started_at.slice(0, 19).replace(/[:T]/g, '-');
   jsonBtn.addEventListener('click', () => { if (rec) { sync(); downloadText(`carelens-session-${stamp(rec)}.json`, JSON.stringify(rec.toJSON(), null, 2), 'application/json'); } });

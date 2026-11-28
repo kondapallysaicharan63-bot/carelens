@@ -21,6 +21,7 @@
     "modes": { "type": "array", "uniqueItems": true, "items": { "enum": ["camera", "microphone", "fingertip"] } },
     "estimates": { "type": "array", "items": { "$ref": "#/$defs/estimate" } },
     "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+    "summaries": { "type": "array", "items": { "$ref": "#/$defs/summary" }, "description": "optional (absent in older exports): whole-measurement results, currently HRV from a fingertip measurement" },
     "disclaimer": { "type": "string", "minLength": 1 },
     "truncated": { "type": "boolean", "description": "true when a per-metric / event row cap was hit and later rows were dropped" }
   },
@@ -40,6 +41,27 @@
         "reported": { "type": "boolean", "description": "true when the quality gate let the value be shown" },
         "reason": { "type": "string", "maxLength": 40 },
         "span_s": { "type": "number", "exclusiveMinimum": 0, "description": "analysed window length; the estimate is centred at t - span_s/2" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "wall", "kind", "reported", "reason"],
+      "if": { "properties": { "reported": { "const": true } }, "required": ["reported"] },
+      "then": { "required": ["rmssd_ms", "sdnn_ms"] },
+      "properties": {
+        "t": { "type": "number", "minimum": 0, "description": "seconds since started_at when the result was produced" },
+        "wall": { "type": "string" },
+        "kind": { "enum": ["hrv"] },
+        "reported": { "type": "boolean" },
+        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts" },
+        "rmssd_ms": { "type": "number", "minimum": 0 },
+        "sdnn_ms": { "type": "number", "minimum": 0 },
+        "mean_hr_bpm": { "type": "number", "exclusiveMinimum": 0 },
+        "n_beats": { "type": "integer", "minimum": 0 },
+        "n_kept": { "type": "integer", "minimum": 0 },
+        "kept_frac": { "type": "number", "minimum": 0, "maximum": 1 },
+        "duration_s": { "type": "number", "minimum": 0, "description": "length of the continuous-contact segment analysed" }
       }
     },
     "event": {

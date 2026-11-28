@@ -126,6 +126,7 @@ Full engineering spec set in `docs/`, and `CLAUDE.md` is the working guide for C
 | Gait metrics | Approximate walking speed and steadiness per room crossing, as a trend over days |
 | Heart rate (rPPG) | Green channel of a face skin patch, band-passed 0.7–3 Hz, only when still & well lit, with a quality score |
 | Breathing rate | Chest-region vertical motion, band-passed 0.1–0.7 Hz (6–42 breaths/min), when still, with a quality score |
+| Heart-rate variability (website, fingertip only, Experimental) | RMSSD and SDNN from the beat-to-beat intervals of a 60 s+ fingertip measurement, with artifact rejection and a kept-beats quality line. **Bias:** camera timing noise inflates RMSSD (about +3 to +13 ms in our synthetic tests at 30 fps, more at higher noise), so it reads higher than a chest strap or ECG. Compare trends over days, not single numbers. Not a stress or health score |
 | Dashboard | Local web page (localhost only) with timeline, events, trends, and a "Simulated or test data" banner |
 
 ## Install

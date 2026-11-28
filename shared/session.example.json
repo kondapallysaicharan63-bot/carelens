@@ -389,5 +389,21 @@
    "peak_score": 0.8
   }
  ],
+ "summaries": [
+  {
+   "t": 70.0,
+   "wall": "2026-11-20T10:01:10.000-08:00",
+   "kind": "hrv",
+   "reported": true,
+   "reason": "ok",
+   "rmssd_ms": 34.3,
+   "sdnn_ms": 28.6,
+   "mean_hr_bpm": 70.6,
+   "n_beats": 83,
+   "n_kept": 81,
+   "kept_frac": 0.988,
+   "duration_s": 70.0
+  }
+ ],
  "disclaimer": "Not a medical device. For demonstration and wellbeing trends only. Do not use for diagnosis or emergencies; call emergency services if you feel unwell."
 }

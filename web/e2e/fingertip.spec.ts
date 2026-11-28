@@ -14,6 +14,9 @@ test('fingertip heart rate from a synthetic 72 bpm clip, export and accuracy rou
   await page.locator('#mode-fingertip').check();
   await page.locator('#start').click();
 
+  // the HRV card is present but inactive until 60 s of steady contact
+  await expect(page.locator('#fp-hrv')).toContainText('Hold steady for 60 s');
+  await expect(page.locator('#fp-hrv-card')).toContainText('Not a stress or health score');
   // wait for the first reported reading, then watch it for a few seconds
   const bpmEl = page.locator('#fp-bpm');
   await expect(bpmEl).toHaveText(/^\d+ bpm$/, { timeout: 90_000 });

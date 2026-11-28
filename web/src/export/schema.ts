@@ -2,6 +2,7 @@
 // carelens/websession.py implements the same checks. Wellbeing trends only. Not a medical device.
 export const SCHEMA_VERSION = 1; // JSON 1 and 1.0 are the same number; booleans are not numbers (Number.isInteger(true) is false)
 export const METRICS = ['hr_fingertip', 'hr_face', 'br_camera', 'br_sound'] as const;
+export const SUMMARY_KINDS = ['hrv'] as const;
 export const EVENT_KINDS = ['possible_fall', 'inactivity', 'cough'] as const;
 export const MODES = ['camera', 'microphone', 'fingertip'] as const;
 export const UA_FAMILIES = ['Chrome', 'Edge', 'Firefox', 'Safari', 'Other'] as const;
@@ -16,9 +17,14 @@ export interface EstimateRow {
 export interface EventRow {
   t: number; wall: string; kind: EventKind; t_onset?: number; t_end?: number; peak_score?: number; trigger?: string;
 }
+/** Whole-measurement result (W6 HRV). `summaries` is an optional top-level array: absent in older exports. */
+export interface SummaryRow {
+  t: number; wall: string; kind: (typeof SUMMARY_KINDS)[number]; reported: boolean; reason: string;
+  rmssd_ms?: number; sdnn_ms?: number; mean_hr_bpm?: number; n_beats?: number; n_kept?: number; kept_frac?: number; duration_s?: number;
+}
 export interface SessionExport {
   schema_version: number; app_version: string; params_version: number; started_at: string; tz_offset_min: number;
-  device: { user_agent_family: UaFamily }; modes: Mode[]; estimates: EstimateRow[]; events: EventRow[]; disclaimer: string; truncated?: boolean;
+  device: { user_agent_family: UaFamily }; modes: Mode[]; estimates: EstimateRow[]; events: EventRow[]; summaries?: SummaryRow[]; disclaimer: string; truncated?: boolean;
 }
 
 const ISO_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
@@ -39,7 +45,7 @@ export function validateSession(x: unknown): string[] {
   if (!isObj(x)) return ['session: must be a JSON object'];
   const top = ['schema_version', 'app_version', 'params_version', 'started_at', 'tz_offset_min', 'device', 'modes', 'estimates', 'events', 'disclaimer'];
   for (const k of top) if (!(k in x)) errs.push(`session: missing "${k}"`);
-  noExtra(x, [...top, 'truncated'], 'session', errs);
+  noExtra(x, [...top, 'truncated', 'summaries'], 'session', errs);
   if ('truncated' in x && typeof x.truncated !== 'boolean') errs.push('truncated: expected a boolean');
   if ('schema_version' in x && !(Number.isInteger(x.schema_version) && x.schema_version === SCHEMA_VERSION)) errs.push(`schema_version: expected ${SCHEMA_VERSION}, got ${JSON.stringify(x.schema_version)}`);
   if ('app_version' in x && !(typeof x.app_version === 'string' && x.app_version.length >= 1 && x.app_version.length <= 32)) errs.push('app_version: expected a string of 1-32 characters');
@@ -65,7 +71,28 @@ export function validateSession(x: unknown): string[] {
     if (!Array.isArray(x.events)) errs.push('events: must be an array');
     else x.events.forEach((e, i) => eventErrors(e, `events[${i}]`, errs));
   }
+  if ('summaries' in x) {
+    if (!Array.isArray(x.summaries)) errs.push('summaries: must be an array');
+    else x.summaries.forEach((e, i) => summaryErrors(e, `summaries[${i}]`, errs));
+  }
   return errs.slice(0, 50);
+}
+
+function summaryErrors(e: unknown, w: string, errs: string[]): void {
+  if (!isObj(e)) { errs.push(`${w}: must be an object`); return; }
+  const req = ['t', 'wall', 'kind', 'reported', 'reason'];
+  for (const k of req) if (!(k in e)) errs.push(`${w}: missing "${k}"`);
+  noExtra(e, [...req, 'rmssd_ms', 'sdnn_ms', 'mean_hr_bpm', 'n_beats', 'n_kept', 'kept_frac', 'duration_s'], w, errs);
+  if ('t' in e && !(isNum(e.t) && e.t >= 0)) errs.push(`${w}.t: expected a number >= 0`);
+  if ('wall' in e && !isoOk(e.wall)) errs.push(`${w}.wall: expected ISO 8601 with a UTC offset`);
+  if ('kind' in e && !oneOf(SUMMARY_KINDS, e.kind)) errs.push(`${w}.kind: expected one of ${SUMMARY_KINDS.join('|')}`);
+  if ('reported' in e && typeof e.reported !== 'boolean') errs.push(`${w}.reported: expected a boolean`);
+  if ('reason' in e && !(typeof e.reason === 'string' && e.reason.length <= 40)) errs.push(`${w}.reason: expected a string up to 40 characters`);
+  for (const k of ['rmssd_ms', 'sdnn_ms', 'duration_s'] as const) if (k in e && !(isNum(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected a number >= 0`);
+  if ('mean_hr_bpm' in e && !(isNum(e.mean_hr_bpm) && e.mean_hr_bpm > 0)) errs.push(`${w}.mean_hr_bpm: expected a number > 0`);
+  for (const k of ['n_beats', 'n_kept'] as const) if (k in e && !(Number.isInteger(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected an integer >= 0`);
+  if ('kept_frac' in e && !(isNum(e.kept_frac) && e.kept_frac >= 0 && e.kept_frac <= 1)) errs.push(`${w}.kept_frac: expected a number in [0, 1]`);
+  if (e.reported === true && !(isNum(e.rmssd_ms) && isNum(e.sdnn_ms))) errs.push(`${w}: reported rows need rmssd_ms and sdnn_ms`);
 }
 
 function estimateErrors(e: unknown, w: string, errs: string[]): void {

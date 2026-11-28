@@ -14,6 +14,8 @@ export {
   powerSpectrum, spectralPeak, spectralSnr, taper,
 } from './dsp';
 
+import type { HrvParams } from './hrv';
+
 export interface ContactPpgParams {
   window_s: number; step_s: number; fs_hz: number; max_gap_s: number; min_rate_hz: number;
   band_lo_hz: number; band_hi_hz: number; taper_stop_lo_hz: number; taper_stop_hi_hz: number;
@@ -196,15 +198,36 @@ export class ContactPPG {
   private state: 'ok' | 'no_finger' | 'saturated' = 'ok';
   private nextOut: number | null = null;
   private lastT: number | null = null;
+  // raw samples of the current contact epoch AFTER settling (W6 HRV), frozen at hrv.max_duration_s; hrv undefined: not recorded
+  private segT: number[] = [];
+  private segR: number[] = [];
+  private segG: number[] = [];
+  private segUpd = 0; // 1 s updates since settling ended (current epoch)
+  private segOk = 0; // ... of which steady: reported ok, or every W1 gate passed except SNR
 
-  constructor(private readonly p: ContactPpgParams) {
+  constructor(private readonly p: ContactPpgParams, private readonly hrv?: HrvParams) {
     assertContactPpgParams(p);
+  }
+
+  /** `[t, r, g, nUpdates, nOk]` of the current contact epoch (W6 HRV input). */
+  segment(): { t: number[]; r: number[]; g: number[]; nUpd: number; nOk: number } {
+    return { t: this.segT, r: this.segR, g: this.segG, nUpd: this.segUpd, nOk: this.segOk };
+  }
+
+  /** Length (s) of the buffered post-settling segment; 0 before it has two samples. */
+  segmentSeconds(): number {
+    return this.segT.length >= 2 ? this.segT[this.segT.length - 1]! - this.segT[0]! : 0;
+  }
+
+  private resetSegment(): void {
+    this.segT = []; this.segR = []; this.segG = []; this.segUpd = 0; this.segOk = 0;
   }
 
   reset(): void {
     this.t = []; this.r = []; this.g = [];
     this.prevR = null; this.contactSince = null; this.epoch = 0; this.state = 'ok';
     this.nextOut = null; this.lastT = null; this.lastIbisMs = [];
+    this.resetSegment();
   }
 
   /** Seconds of continuous contact so far (0 if none). */
@@ -215,6 +238,7 @@ export class ContactPPG {
   private clear(r: number, state: 'no_finger' | 'saturated'): void {
     this.t = []; this.r = []; this.g = [];
     this.contactSince = null; this.prevR = r; this.state = state;
+    this.resetSegment();
   }
 
   update(t: number, r: number, g: number, _b = 0, clipFrac = 0): PpgUpdate | null {
@@ -230,6 +254,7 @@ export class ContactPPG {
       this.prevR = r;
       if (this.contactSince === null) { this.contactSince = t; this.epoch++; }
       this.t.push(t); this.r.push(r); this.g.push(g);
+      if (this.hrv && t - this.contactSince >= p.settle_s && (this.segT.length === 0 || t - this.segT[0]! <= this.hrv.max_duration_s)) { this.segT.push(t); this.segR.push(r); this.segG.push(g); }
       let drop = 0;
       while (this.t.length - drop >= 2 && this.t[drop + 1]! < t - p.window_s) drop++;
       if (drop) { this.t.splice(0, drop); this.r.splice(0, drop); this.g.splice(0, drop); }
@@ -245,14 +270,18 @@ export class ContactPPG {
     if (this.state !== 'ok') { out.reason = this.state; return out; }
     if (this.contactSince === null || t - this.contactSince < p.settle_s) { out.reason = 'settling'; return out; }
     const a = analyzeWindow(this.t, this.r, this.g, p);
+    const counting = !!this.hrv && this.segT.length > 0 && t - this.segT[0]! <= this.hrv.max_duration_s;
+    if (counting) this.segUpd++;
     if (a.gaps) { out.reason = 'gaps'; return out; }
     this.lastIbisMs = a.ibis_ms;
     out.bpm = a.bpm;
     out.bpm_ibi = a.bpm_ibi;
     out.quality = a.quality; out.snr = a.snr; out.pi = a.pi; out.channel = a.channel; out.span_s = a.span_s;
-    if (a.snr < p.min_snr || !(p.pi_min <= a.pi && a.pi <= p.pi_max) || a.delta === null) out.reason = 'low_signal';
+    const piOk = p.pi_min <= a.pi && a.pi <= p.pi_max;
+    if (counting && a.snr < p.min_snr && piOk && a.delta !== null && Math.abs(a.delta) <= p.agree_bpm) this.segOk++; // steady for HRV
+    if (a.snr < p.min_snr || !piOk || a.delta === null) out.reason = 'low_signal';
     else if (Math.abs(a.delta) > p.agree_bpm) out.reason = 'disagree';
-    else { out.reason = 'ok'; out.reported = true; }
+    else { out.reason = 'ok'; out.reported = true; if (counting) this.segOk++; }
     return out;
   }
 }
@@ -262,7 +291,7 @@ export function runContactPpg(
   inp: { t: number[]; r: number[]; g: number[]; b: number[]; clip_frac: number[] },
   p: ContactPpgParams,
 ): { updates: PpgUpdate[]; final_ibis_ms: number[] } {
-  const cp = new ContactPPG(p);
+  const cp = new ContactPPG(p); // no HRV segment: the W1 fixtures do not need it
   const updates: PpgUpdate[] = [];
   inp.t.forEach((t, i) => {
     const u = cp.update(t, inp.r[i]!, inp.g[i]!, inp.b[i]!, inp.clip_frac[i]!);
