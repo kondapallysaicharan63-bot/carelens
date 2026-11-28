@@ -1,0 +1,17 @@
+{
+ "description": "Fixtures with no TypeScript implementation yet. The web parity test fails if a fixture is pending that is not listed here (e.g. an implementation was dropped). Remove names as ports land.",
+ "pending": [
+  "breathing_10bpm",
+  "breathing_15bpm",
+  "breathing_20bpm",
+  "fall_slow_lie_down",
+  "fall_sudden",
+  "hr_green_110bpm",
+  "hr_green_60bpm",
+  "hr_green_72bpm",
+  "hr_green_90bpm",
+  "hr_green_low_light",
+  "hr_green_motion_burst",
+  "inactivity_sit_still"
+ ]
+}

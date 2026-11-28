@@ -18,25 +18,29 @@ from typing import Optional
 import numpy as np
 
 from . import pose as P
+from .params import PARAMS
+
+_T = PARAMS.tracking
 
 CENTROID_KPS = [P.L_SHOULDER, P.R_SHOULDER, P.L_HIP, P.R_HIP]
 
 
 @dataclass
 class TrackingConfig:
-    hold_s: float = 0.5          # max dropout that is bridged with the last pose
-    enter_s: float = 0.2         # consecutive-detection span needed to become present (>= 2 frames
+    hold_s: float = _T.hold_s          # max dropout that is bridged with the last pose
+    enter_s: float = _T.enter_s         # consecutive-detection span needed to become present (>= 2 frames
                                  # at low fps; a lone detection never creates presence)
-    max_jump: float = 0.25       # displacement (frame-height units) treated as a new track / raw passthrough
-    min_cutoff: float = 1.0      # One Euro: Hz, smoothing of slow/static motion
-    beta: float = 1.0            # One Euro: speed coefficient (coords are in frame units/s)
-    d_cutoff: float = 1.0        # One Euro: Hz, derivative smoothing
+    max_jump: float = _T.max_jump_frame_heights       # displacement (frame-height units) treated as a new track / raw passthrough
+    min_cutoff: float = _T.one_euro_min_cutoff_hz      # One Euro: Hz, smoothing of slow/static motion
+    beta: float = _T.one_euro_beta            # One Euro: speed coefficient (coords are in frame units/s)
+    d_cutoff: float = _T.one_euro_d_cutoff_hz        # One Euro: Hz, derivative smoothing
 
 
 class OneEuroFilter:
     """Vectorised One Euro filter over a numpy array, time-based (uses sample times)."""
 
-    def __init__(self, min_cutoff=1.0, beta=0.05, d_cutoff=1.0):
+    def __init__(self, min_cutoff=_T.one_euro_min_cutoff_hz, beta=_T.one_euro_filter_default_beta,
+                 d_cutoff=_T.one_euro_d_cutoff_hz):
         self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
         self.reset()
 

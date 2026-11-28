@@ -8,6 +8,9 @@ from typing import Optional
 import numpy as np
 
 from . import pose as P
+from .params import PARAMS
+
+_F = PARAMS.features
 
 CORE = [P.L_SHOULDER, P.R_SHOULDER, P.L_HIP, P.R_HIP]
 
@@ -32,8 +35,9 @@ def _mid(lm, a, b):
 
 
 class FeatureExtractor:
-    def __init__(self, min_visibility: float = 0.5, walk_speed: float = 0.25,
-                 smooth_s: float = 1.0, aspect: float = 4 / 3):
+    def __init__(self, min_visibility: float = _F.min_visibility,
+                 walk_speed: float = _F.walk_speed_bodysizes_s,
+                 smooth_s: float = _F.smooth_s, aspect: float = _F.aspect_w_over_h):
         # aspect = frame width / height. x is rescaled so both axes are in
         # "frame-height units"; pixel coords are then coord * frame_height.
         self.aspect = aspect
@@ -94,13 +98,13 @@ class FeatureExtractor:
             speed_x = abs(x1 - x0) / (t1 - t0) / extent
 
         # Posture
-        if angle > 60:
+        if angle > _F.lying_torso_angle_deg:
             posture = "lying"
         else:
             ank = _mid(lm, P.L_ANKLE, P.R_ANKLE)
             ank_ok = lm[[P.L_ANKLE, P.R_ANKLE], 2].mean() >= self.min_vis
-            leg_ratio = (ank[1] - hip[1]) / torso_len if ank_ok else 1.6
-            posture = "standing" if leg_ratio > 1.2 else "sitting"
+            leg_ratio = (ank[1] - hip[1]) / torso_len if ank_ok else _F.default_leg_ratio
+            posture = "standing" if leg_ratio > _F.standing_leg_ratio else "sitting"
             if posture == "standing" and speed_x > self.walk_speed:
                 posture = "walking"
 

@@ -13,6 +13,11 @@ from typing import Optional
 import numpy as np
 
 from .features import BodyState
+from .params import PARAMS
+
+_FALL = PARAMS.events.fall
+_GAIT = PARAMS.events.gait
+_STILL = PARAMS.common.still_motion_bodysizes_s
 
 
 @dataclass
@@ -32,9 +37,10 @@ class FallDetector:
     """Sudden drop in torso angle or hip height, then little movement for
     `still_seconds`. Standing back up cancels a pending fall."""
 
-    def __init__(self, drop_window_s=0.9, upright_deg=40, lying_deg=60, drop_frac=0.35,
-                 min_angle_rate=40.0, still_seconds=20.0, still_motion=0.08,
-                 pending_timeout_s=120.0):
+    def __init__(self, drop_window_s=_FALL.drop_window_s, upright_deg=_FALL.upright_deg,
+                 lying_deg=_FALL.lying_deg, drop_frac=_FALL.drop_frac,
+                 min_angle_rate=_FALL.min_angle_rate_deg_s, still_seconds=_FALL.still_seconds,
+                 still_motion=_STILL, pending_timeout_s=_FALL.pending_timeout_s):
         self.drop_window_s = drop_window_s
         self.upright_deg = upright_deg
         self.lying_deg = lying_deg
@@ -56,7 +62,7 @@ class FallDetector:
                 return {"trigger": "torso_angle", "from_deg": round(ang0, 1),
                         "to_deg": round(s.torso_angle, 1), "drop_time_s": round(dt, 2),
                         "angle_rate_deg_s": round((s.torso_angle - ang0) / dt, 1)}
-            if (s.hip_y - hip0) > self.drop_frac * size0 and (s.hip_y - hip0) / size0 / dt >= 0.3:
+            if (s.hip_y - hip0) > self.drop_frac * size0 and (s.hip_y - hip0) / size0 / dt >= _FALL.hip_drop_min_rate_frac_s:
                 return {"trigger": "hip_drop", "drop_body_frac": round((s.hip_y - hip0) / size0, 2),
                         "drop_time_s": round(dt, 2)}
         return None
@@ -121,7 +127,7 @@ class FallDetector:
 class InactivityDetector:
     """No meaningful movement for `seconds` while the person is present."""
 
-    def __init__(self, seconds=1800.0, still_motion=0.08):
+    def __init__(self, seconds=PARAMS.events.inactivity.seconds, still_motion=_STILL):
         self.seconds = seconds
         self.still_motion = still_motion
         self._start: Optional[float] = None
@@ -160,7 +166,7 @@ class ActivityTimeline:
 
     def update(self, s: BodyState):
         if self._last_t is not None:
-            dt = min(s.t - self._last_t, 1.0)
+            dt = min(s.t - self._last_t, PARAMS.events.timeline.max_step_s)
             hour = (self.start_time + timedelta(seconds=s.t)).strftime("%Y-%m-%d %H:00")
             self.buckets[hour][s.posture] += dt
         self._last_t = s.t
@@ -177,7 +183,8 @@ class GaitAnalyzer:
     assumes a roughly side-on view. Use it as a trend over days, not an absolute.
     """
 
-    def __init__(self, person_height_m=1.65, min_walk_s=2.0, gap_s=0.5):
+    def __init__(self, person_height_m=_GAIT.person_height_m, min_walk_s=_GAIT.min_walk_s,
+                 gap_s=_GAIT.gap_s):
         self.height_m = person_height_m
         self.min_walk_s = min_walk_s
         self.gap_s = gap_s

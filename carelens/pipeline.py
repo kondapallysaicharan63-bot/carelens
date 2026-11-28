@@ -23,6 +23,7 @@ from .events import ActivityTimeline, Event, FallDetector, GaitAnalyzer, Inactiv
 from .features import FeatureExtractor
 from .sources import LiveSource, VideoSource
 from .tracking import PresenceTracker, TrackingConfig
+from .params import PARAMS
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 
 BANNER = "Simulated or test data - personal learning project, not a medical device"
@@ -32,14 +33,14 @@ LIVE_KINDS = {"usb", "rtsp", "csi"}
 
 @dataclass
 class Config:
-    fall_still_seconds: float = 20.0
-    inactivity_seconds: float = 1800.0
-    still_motion: float = 0.08
-    person_height_m: float = 1.65
-    clip_pre_s: float = 5.0
-    clip_buffer_s: float = 45.0
-    hr_min_quality: float = 0.35
-    br_min_quality: float = 0.35
+    fall_still_seconds: float = PARAMS.events.fall.still_seconds
+    inactivity_seconds: float = PARAMS.events.inactivity.seconds
+    still_motion: float = PARAMS.common.still_motion_bodysizes_s
+    person_height_m: float = PARAMS.events.gait.person_height_m
+    clip_pre_s: float = PARAMS.pipeline.clip_pre_s
+    clip_buffer_s: float = PARAMS.pipeline.clip_buffer_s
+    hr_min_quality: float = PARAMS.common.min_quality
+    br_min_quality: float = PARAMS.common.min_quality
     data_label: str = "test"   # "test" | "simulated"
     tracking: Optional[TrackingConfig] = field(default_factory=TrackingConfig)  # None disables
 
