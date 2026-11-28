@@ -3,8 +3,8 @@ import { AudioClassifier, FilesetResolver } from '@mediapipe/tasks-audio';
 const BASE = import.meta.env.BASE_URL;
 
 export interface YamnetHandle {
-  /** Scores of the requested labels for one 15600-sample (0.975 s) 16 kHz window. */
-  classify(window: Float32Array, labels: readonly string[]): Record<string, number>;
+  /** Scores of the requested labels for one 15600-sample (0.975 s) 16 kHz window; `tEnd` = end of the window in stream seconds (only the scripted test provider uses it). */
+  classify(window: Float32Array, labels: readonly string[], tEnd?: number): Record<string, number>;
   close(): void;
 }
 

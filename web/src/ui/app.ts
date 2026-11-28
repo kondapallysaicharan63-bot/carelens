@@ -17,8 +17,13 @@ import { HrvRecorder } from '../export/hrv';
 import { buildFaceCard, FaceHrSession, type FaceCard } from './faceHr';
 import { qualityMeter } from './quality';
 import { buildPoseCards, type PoseCards } from './poseCards';
+import { buildCheckinSurface } from './checkinSurface';
+import { buildSleepCards, PAUSES_NOTE, PAUSES_TITLE, SNORING_NOTE, SNORING_TITLE, TALKING_NOTE, TALKING_TITLE, type SleepCards } from './sleepCards';
+import { SoundCheckins } from './soundCheckins';
+import { buildNightPanel, setNightClass, NightChoices, NIGHT_LISTENING, NIGHT_NO_MIC, type NightPanel } from './nightMode';
+import { WakeLockKeeper } from '../capture/wakeLock';
 import { buildAudioCards, buildAudioOffCards, type AudioCards } from './audioCards';
-import { AudioSession } from '../capture/audioSession';
+import { AudioSession, EVENT_PARAMS } from '../capture/audioSession';
 import { createYamnet } from '../capture/yamnet';
 import { Consent, DISCLAIMER } from './consent';
 import { el } from './dom';
@@ -50,6 +55,14 @@ export function mountApp(root: HTMLElement): void {
   let movementTests: MovementTests | null = null;
   let tremorTest: TremorTest | null = null;
   let mode: Mode = 'standard';
+  // Night mode (phone near the bed): microphone first, dimmed page, screen kept awake where the browser allows it.
+  let night = false;
+  const nightChoices = new NightChoices();
+  /** night mode actually running (ticked AND a microphone) */
+  let nightRun = false;
+  let wake: WakeLockKeeper | null = null;
+  let soundCheckins: SoundCheckins | null = null;
+  let lastSoundSummary: string | null = null;
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
   let stdCamera = consent.state.camera;
   let stdMic = consent.state.mic;
@@ -109,6 +122,9 @@ export function mountApp(root: HTMLElement): void {
     mic.checked = stdMic;
     const start = el('button', { type: 'button', class: 'btn primary', id: 'start' }, 'Start');
     const micRow = el('label', { class: 'toggle' }, mic, el('span', {}, 'Use microphone'));
+    const nightBox = el('input', { type: 'checkbox', id: 'consent-night' });
+    nightBox.checked = night;
+    const nightRow = el('label', { class: 'toggle' }, nightBox, el('span', {}, 'Night mode: phone near the bed, microphone only (camera optional), screen dimmed and kept awake'));
     const modeStd = el('input', { type: 'radio', name: 'mode', id: 'mode-standard', value: 'standard' });
     const modeFp = el('input', { type: 'radio', name: 'mode', id: 'mode-fingertip', value: 'fingertip' });
     modeStd.checked = mode === 'standard';
@@ -122,7 +138,8 @@ export function mountApp(root: HTMLElement): void {
         cam.checked = stdCamera;
         mic.checked = stdMic;
       }
-      micRow.hidden = mode === 'fingertip';
+      micRow.hidden = nightRow.hidden = mode === 'fingertip';
+      mic.disabled = night && mode === 'standard'; // night mode needs the microphone
       cam.disabled = mode === 'fingertip';
       start.textContent = mode === 'fingertip' ? 'Start fingertip heart rate' : 'Start';
       consent.setCamera(cam.checked);
@@ -139,6 +156,13 @@ export function mountApp(root: HTMLElement): void {
       if (mode === 'standard') stdMic = mic.checked;
       sync();
     });
+    nightBox.addEventListener('change', () => {
+      night = nightBox.checked;
+      const c = nightChoices.apply(night, { camera: stdCamera, mic: stdMic }); // microphone forced on and locked; camera off but tickable; unticking restores the old choices
+      stdCamera = c.camera;
+      stdMic = c.mic;
+      sync();
+    });
     start.addEventListener('click', () => {
       sync();
       if (consent.start()) void (mode === 'fingertip' ? beginFingertip() : beginCapture());
@@ -151,6 +175,7 @@ export function mountApp(root: HTMLElement): void {
         'section',
         { class: 'panel consent' },
         el('h2', {}, 'Before you start'),
+        ...(lastSoundSummary ? [el('p', { class: 'note', id: 'last-sound-summary' }, 'Last session — ' + lastSoundSummary)] : []),
         el('p', { class: 'disclaimer', id: 'disclaimer' }, DISCLAIMER),
         el('p', {}, 'Everything is processed on this device. Video and sound are never uploaded or saved. Choose what to allow; you can change this each time.'),
         el(
@@ -162,6 +187,8 @@ export function mountApp(root: HTMLElement): void {
         ),
         el('label', { class: 'toggle' }, cam, el('span', {}, 'Use camera')),
         micRow,
+        nightRow,
+        el('p', { class: 'note' }, 'Night mode shows snoring sounds, possible pauses in breathing sounds and talking time. It is not a sleep test.'),
         errBox,
         start,
       ),
@@ -171,7 +198,7 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests, tremor?: TremorTest, blink?: BlinkCard, activity?: ActivityCard): HTMLElement {
+  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests, tremor?: TremorTest, blink?: BlinkCard, activity?: ActivityCard, sleep?: SleepCards): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
@@ -194,6 +221,9 @@ export function mountApp(root: HTMLElement): void {
       else if (t === 'Hand movement') g2.append(tremor ? tremor.root : makeCard('Hand movement', 2, TREMOR_NOTE, 'Starts when the camera is on.').root);
       else if (t === BLINK_TITLE) g2.append(blink ? blink.root : makeCard(BLINK_TITLE, 2, BLINK_NOTE, 'Starts when the camera is on.').root);
       else if (t === 'Activity') g2.append(activity ? activity.root : makeCard('Activity', 2, ACTIVITY_NOTE, 'Starts when the camera is on.').root);
+      else if (t === SNORING_TITLE) g2.append(sleep ? sleep.snoring : makeCard(t, 2, SNORING_NOTE, 'Microphone is off').root);
+      else if (t === PAUSES_TITLE) g2.append(sleep ? sleep.pauses : makeCard(t, 2, PAUSES_NOTE, 'Microphone is off').root);
+      else if (t === TALKING_TITLE) g2.append(sleep ? sleep.talking : makeCard(t, 2, TALKING_NOTE, 'Microphone is off').root);
       else g2.append(makeCard(t, 2, n).root);
     }
     e.append(g2);
@@ -219,6 +249,12 @@ export function mountApp(root: HTMLElement): void {
     movementTests = null;
     tremorTest?.disable('The camera is off, so the hand test cannot run. Start the camera to try it.');
     tremorTest = null;
+    soundCheckins?.finish();
+    lastSoundSummary = soundCheckins?.summaryText() ?? lastSoundSummary;
+    soundCheckins = null;
+    wake?.stop();
+    wake = null;
+    setNightClass(document.documentElement, false);
     if (recorder) void dataPanel.sessionEnded(recorder);
     stopStream(stream);
     stream = null;
@@ -227,7 +263,11 @@ export function mountApp(root: HTMLElement): void {
   async function beginCapture(): Promise<void> {
     const g = ++gen;
     const rec = startRecorder([...(consent.state.camera ? ['camera' as const] : []), ...(consent.state.mic ? ['microphone' as const] : [])]);
-    const pose = consent.state.camera ? buildPoseCards(qualityMeter) : undefined;
+    lastSoundSummary = null;
+    const surface = buildCheckinSurface();
+    const pose = consent.state.camera ? buildPoseCards(qualityMeter, () => Date.now(), surface) : undefined;
+    const sound = consent.state.mic ? new SoundCheckins({ log: surface.log, refresh: surface.refresh, rec, ev: EVENT_PARAMS }) : null;
+    soundCheckins = sound;
     const activity = pose ? buildActivityCard({ record: (row) => void rec.upsertSummary(row) }) : undefined;
     const movement = pose ? buildMovementTests({ mp: MOVEMENT_PARAMS, record: (row) => void rec.addMobilitySummary(row), heightSaving: () => dataPanel.savingEnabled() }) : undefined;
     movementTests = movement ?? null;
@@ -244,7 +284,9 @@ export function mountApp(root: HTMLElement): void {
         },
         onEvent(e) {
           h.onEvent(e);
-          rec.addEvent({ kind: e.kind === 'fall' ? 'possible_fall' : 'inactivity', agoS: e.tConfirmed - e.tOnset, trigger: e.details.trigger });
+          const row = rec.addEvent({ kind: e.kind === 'fall' ? 'possible_fall' : 'inactivity', agoS: e.tConfirmed - e.tOnset, trigger: e.details.trigger });
+          const entry = surface.log.entries[surface.log.entries.length - 1];
+          if (e.kind === 'fall' && entry) sound?.registerFall(e, entry.id, row); // a thump / scream / glass sound near the fall adds "with a sound cue"
         },
       };
     }
@@ -302,7 +344,12 @@ export function mountApp(root: HTMLElement): void {
       face.hooks = { ...h, onLandmarks: (f) => blink.onFrame(f) };
     }
     const audio = consent.state.mic ? buildAudioCards(qualityMeter) : null;
-    if (audio) {
+    const sleep = audio ? buildSleepCards() : undefined;
+    nightRun = night && consent.state.mic; // never without a microphone
+    const nightPanel: NightPanel | null = nightRun ? buildNightPanel(document.documentElement) : null;
+    if (audio && sleep) {
+      const baseReset = audio.reset;
+      audio.reset = () => { baseReset(); sleep.reset(); };
       const h = audio.hooks;
       const coughs = new CoughRecorder(rec);
       audio.hooks = {
@@ -315,13 +362,29 @@ export function mountApp(root: HTMLElement): void {
           h.onCough(r);
           coughs.update(r); // stored when first seen, updated while the tracker extends or merges it
         },
+        onSounds(v) {
+          const m = sound ? sound.onSounds(v) : v; // distress-sound check-ins, possible-pause events, session summary rows; m adds earlier audio sessions' totals
+          sleep.onSounds(m);
+          nightPanel?.setSummary(sound?.summaryText() ?? null);
+        },
+        onYamnet(ys, msg) {
+          h.onYamnet(ys, msg);
+          sleep.setModel(ys);
+          if (ys === 'ready') nightPanel?.setSummary(NIGHT_LISTENING);
+          if (ys === 'failed') nightPanel?.setSummary('The sound model did not load, so nothing can be counted. ' + (msg ?? ''));
+        },
       };
     }
     audioCards = audio;
-    if (pose) live.append(pose.banner);
+    if (nightPanel) {
+      setNightClass(document.documentElement, true);
+      live.append(nightPanel.root);
+    }
+    if (pose || audio) live.append(surface.banner);
+    if (!pose && audio) live.append(el('article', { class: 'card', id: 'sound-checkins', 'aria-labelledby': 'h-sound-checkins' }, el('div', { class: 'card-head' }, el('h3', { id: 'h-sound-checkins' }, 'Check-in suggestions'), el('span', { class: 'tag exp' }, 'Experimental')), surface.empty, surface.list, el('p', { class: 'note' }, 'Suggests a check-in; it does not call anyone, send anything or make a sound.')));
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face, audio, movement, tremor, blink, activity), dataPanel.root, notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio, movement, tremor, blink, activity, sleep), dataPanel.root, notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {
@@ -380,6 +443,16 @@ export function mountApp(root: HTMLElement): void {
       blink?.reset(); // the eye baseline and the one-minute window start over with the new camera
       activity?.breakStream();
       if (audioCards && stream) startAudio(g, audioCards, stream); // (re)start the audio chain; the cough count starts again
+      if (nightPanel) {
+        // the screen is held only while a microphone is really being listened to
+        if (atrack) {
+          if (!wake) wake = new WakeLockKeeper(navigator, document, (st) => nightPanel.setWake(st));
+          void wake.start();
+        } else {
+          wake?.stop();
+          nightPanel.setSummary(NIGHT_NO_MIC);
+        }
+      }
       return true;
     };
 
@@ -461,14 +534,21 @@ export function mountApp(root: HTMLElement): void {
     await faceLoad;
   }
 
+  // End-to-end builds only (vite --mode e2e): the test page may supply scripted YAMNet scores; without them the real model loads.
+  // The condition is a build-time constant, so the dynamic import and the provider are removed from production builds.
+  const loadYamnet = import.meta.env.VITE_E2E === '1'
+    ? async () => (await import('../e2e/scriptedYamnet')).createScriptedYamnetIfSet() ?? createYamnet()
+    : createYamnet;
+
   /** Mic consent is on: worklet capture + envelope + YAMNet. A failure only affects the two audio cards. */
   function startAudio(g: number, cards: AudioCards, s: MediaStream): void {
     audioSession?.end();
     cards.reset();
-    const session = new AudioSession(cards.hooks);
+    soundCheckins?.reset(); // a new audio session: its trackers start at zero, the totals so far are kept
+    const session = new AudioSession(cards.hooks, undefined, recorder?.now() ?? 0);
     audioSession = session;
     session.start(s).then(
-      (running) => { if (running && g === gen && !session.isEnded) void session.loadYamnet(createYamnet); },
+      (running) => { if (running && g === gen && !session.isEnded) void session.loadYamnet(loadYamnet); },
       (err) => {
         if (session.isEnded) return;
         cards.reset(); // no stale reading or "no microphone" state from before

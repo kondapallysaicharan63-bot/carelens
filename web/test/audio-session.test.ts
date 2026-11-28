@@ -36,7 +36,7 @@ const stream = { getAudioTracks: () => [track] } as unknown as MediaStream;
 
 function makeHooks() {
   return {
-    onLevel: vi.fn(), onBreath: vi.fn(), onCough: vi.fn(), onNoMic: vi.fn(), onYamnet: vi.fn(),
+    onLevel: vi.fn(), onBreath: vi.fn(), onCough: vi.fn(), onNoMic: vi.fn(), onYamnet: vi.fn(), onSounds: vi.fn(),
   } satisfies Record<keyof AudioHooks, unknown>;
 }
 function makeDeps(ctxs: FakeCtx[], clock = { ms: 0 }) {
@@ -155,6 +155,20 @@ describe('AudioSession YAMNet wiring', () => {
     const { h, handle, s } = await run(() => ({ Cough: n++ === 0 ? 0.9 : 0.0, Speech: 0 }));
     expect(handle.classify.mock.calls.length).toBe(3); // at 1.455 s, 1.935 s, 2.415 s
     expect(h.onCough.mock.calls.at(-1)![0].count).toBe(1);
+    s.end();
+  });
+  it('W10: asks for the snoring / speech / distress labels with the window end time and reports the sound view', async () => {
+    let n = 0;
+    const { h, handle, s } = await run(() => ({ Cough: 0, Speech: 0.8, Snoring: 0, Screaming: n++ < 2 ? 0.9 : 0, 'Crying, sobbing': 0, Glass: 0, 'Thump, thud': 0 }));
+    const [, labels, tEnd] = handle.classify.mock.calls[0] as unknown as [unknown, string[], number];
+    expect(labels).toEqual(['Cough', 'Speech', 'Snoring', 'Screaming', 'Crying, sobbing', 'Glass', 'Thump, thud']);
+    expect(tEnd).toBeCloseTo(1.455, 3);
+    const v = h.onSounds.mock.calls.at(-1)![0];
+    expect(v.distress.map((d: { label: string }) => d.label)).toEqual(['Screaming', 'Crying, sobbing', 'Glass', 'Thump, thud']);
+    expect(v.distress[0].view.count).toBe(1);
+    expect(v.talking.count).toBe(1);
+    expect(v.talking.total_s).toBeGreaterThan(0);
+    expect(v.pauses.count).toBe(0);
     s.end();
   });
   it('closes the handle on a classify failure and stops classifying', async () => {

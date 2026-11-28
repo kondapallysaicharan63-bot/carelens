@@ -14,7 +14,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 METRICS = ("hr_fingertip", "hr_face", "br_camera", "br_sound")
-EVENT_KINDS = ("possible_fall", "inactivity", "cough")
+EVENT_KINDS = ("possible_fall", "inactivity", "cough", "distress_sound", "possible_pause")
 MODES = ("camera", "microphone", "fingertip")
 UA_FAMILIES = ("Chrome", "Edge", "Firefox", "Safari", "Other")
 # estimator default windows (s) when an estimate carries no span_s
@@ -26,19 +26,23 @@ _TOP = ("schema_version", "app_version", "params_version", "started_at", "tz_off
 _OPTIONAL_TOP = ("truncated", "summaries")
 _EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
 _EV_REQ = ("t", "wall", "kind")
-_EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
-SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity")
+_EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger", "sound_cue", "merged_into_fall")
+SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity", "snoring", "pauses", "talking")
 MOBILITY_KINDS = SUMMARY_KINDS[1:5]
 PHASE_KEYS = ("rise", "walk_out", "turn_1", "walk_back", "turn_2", "sit")
 MAX_REP_TIMES = 100
 # reported rows must carry this headline number (kind -> required fields)
 _SUM_HEADLINE = {"hrv": ("rmssd_ms", "sdnn_ms"), "chair_stand_30s": ("reps",), "sit_to_stand_5x": ("time_s",), "tug": ("time_s",),
                  "walking_speed": ("speed_m_s",), "hand_tremor": ("freq_hz", "amp_pct"), "blink": ("blinks_per_min", "eyes_closed_pct"),
-                 "activity": ("active_min", "still_min", "absent_min")}
+                 "activity": ("active_min", "still_min", "absent_min"), "snoring": ("count", "minutes"),
+                 "pauses": ("count", "regular_min"), "talking": ("minutes",)}
 _SUM_REQ = ("t", "wall", "kind", "reported", "reason")
 _SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s",
                       "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s", "freq_hz", "amp_pct", "p2p_pct",
-                      "blinks_per_min", "eyes_closed_pct", "long_closures", "active_min", "still_min", "absent_min", "longest_still_min")
+                      "blinks_per_min", "eyes_closed_pct", "long_closures", "active_min", "still_min", "absent_min", "longest_still_min",
+                      "count", "minutes", "per_hour", "rate_per_h", "regular_min", "durations_s")
+MAX_PER_HOUR = 72
+MAX_DURATIONS = 500
 
 
 class SessionError(ValueError):
@@ -172,6 +176,9 @@ def _event_errors(e, w: str, errs: list) -> None:
         errs.append(f"{w}.peak_score: expected a number in [0, 1]")
     if "trigger" in e and not (isinstance(e["trigger"], str) and len(e["trigger"]) <= 40):
         errs.append(f"{w}.trigger: expected a string up to 40 characters")
+    for k in ("sound_cue", "merged_into_fall"):
+        if k in e and not isinstance(e[k], bool):
+            errs.append(f"{w}.{k}: expected a boolean")
 
 
 def _summary_errors(e, w: str, errs: list) -> None:
@@ -229,6 +236,20 @@ def _summary_errors(e, w: str, errs: list) -> None:
         errs.append(f"{w}.eyes_closed_pct: expected a number in [0, 100]")
     if "long_closures" in e and not (_int(e["long_closures"]) and e["long_closures"] >= 0):
         errs.append(f"{w}.long_closures: expected an integer >= 0")
+    # W10 sound summaries (snoring sounds, possible pauses in breathing sounds, talking time): counts, minutes, per-hour lists
+    if "count" in e and not (_int(e["count"]) and e["count"] >= 0):
+        errs.append(f"{w}.count: expected an integer >= 0")
+    for k in ("minutes", "rate_per_h", "regular_min"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
+    if "per_hour" in e:
+        r = e["per_hour"]
+        if not (isinstance(r, list) and len(r) <= MAX_PER_HOUR and all(_num(v) and v >= 0 for v in r)):
+            errs.append(f"{w}.per_hour: expected up to {MAX_PER_HOUR} numbers >= 0")
+    if "durations_s" in e:
+        r = e["durations_s"]
+        if not (isinstance(r, list) and len(r) <= MAX_DURATIONS and all(_num(v) and v >= 0 for v in r)):
+            errs.append(f"{w}.durations_s: expected up to {MAX_DURATIONS} numbers >= 0")
     if "phases_s" in e:
         ph = e["phases_s"]
         if not isinstance(ph, dict):

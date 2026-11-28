@@ -17,6 +17,11 @@ export interface AudioBreathingParams extends PeakParams {
 export interface LabelEventParams {
   label: string; on_thr: number; off_thr: number; min_frames: number; merge_gap_s: number; refractory_s: number;
 }
+/** W10 per-label detectors (shared/params.json -> audio_events); validated by audioEventsErrors in sleepSounds.ts */
+export interface AudioEventsParams {
+  corroborate_s: number; cue_labels: string[];
+  snoring: LabelEventParams; screaming: LabelEventParams; crying: LabelEventParams; glass: LabelEventParams; thump: LabelEventParams; speech: LabelEventParams;
+}
 export interface AudioParams {
   classifier: string; labels: string[]; fs_hz: number;
   envelope: { frame_len: number; hop: number; band_lo_hz: number; band_hi_hz: number; eps: number };
@@ -336,18 +341,44 @@ export function detectLabelEvents(frames: ReadonlyArray<readonly [number, number
   return { events: events.map(([a, b, c]) => ({ t_start: a, t_end: b, peak_score: c })), count: events.length };
 }
 
+export const MAX_HOURS = 72; // per-hour buckets kept (session hours); later events fall into the last bucket
+
+/** The time one YAMNet frame stands for (its native hop): an event's duration is `t_end - t_start + frameSeconds`. */
+export const frameSeconds = (p: AudioParams): number => p.yamnet.hop_samples / p.fs_hz;
+
+const hourOf = (tStart: number): number => Math.min(MAX_HOURS - 1, Math.max(0, Math.floor(tStart / 3600)));
+function bump(hours: number[], hoursS: number[], h: number, d: number): void {
+  while (hours.length < h + 1) hours.push(0);
+  while (hoursS.length < h + 1) hoursS.push(0);
+  hours[h]!++;
+  hoursS[h]! += d;
+}
+
+/** `{count, total_s, per_hour}` (carelens.audio.summarize_events): total event time and the dense per-SESSION-hour counts. */
+export function summarizeEvents(events: ReadonlyArray<LabelEvent>, frameS: number): { count: number; total_s: number; per_hour: number[]; per_hour_s: number[] } {
+  let total = 0;
+  const per: number[] = [], perS: number[] = [];
+  for (const e of events) { const d = e.t_end - e.t_start + frameS; total += d; bump(per, perS, hourOf(e.t_start), d); }
+  return { count: events.length, total_s: total, per_hour: per, per_hour_s: perS };
+}
+
+export interface LabelView { count: number; last: LabelEvent | null; ticks: number[]; total_s: number; per_hour: number[]; per_hour_s: number[] }
+
 /**
- * Incremental `detectLabelEvents`: constant memory (open segment, last event, running count, a capped list of event starts).
- * `view()` equals the batch result on the frames pushed so far (a test guards it); `count` only grows.
+ * Incremental `detectLabelEvents`: constant memory (open segment, last event, running totals, a capped list of event starts,
+ * per-hour counts). `view()` equals the batch result on the frames pushed so far (a test guards it); `count` only grows.
  */
 export class LabelEventTracker {
   private cur: [number, number, number, number] | null = null;
-  private last: [number, number, number] | null = null; // last finalized event [t_start, t_end, peak]
+  private last: [number, number, number] | null = null; // last finalized event [t_start, t_end, peak] (a merge may still extend it)
   private count = 0;
+  private doneS = 0; // duration of the events before `last`
+  private hours: number[] = []; // per-hour counts of the events before `last`
+  private hoursS: number[] = []; // per-hour seconds of the events before `last`
   private starts: number[] = [];
-  constructor(private readonly p: LabelEventParams, private readonly maxTicks = 500) {}
+  constructor(private readonly p: LabelEventParams, private readonly maxTicks = 500, private readonly frameS = 0.48) {}
 
-  reset(): void { this.cur = null; this.last = null; this.count = 0; this.starts = []; }
+  reset(): void { this.cur = null; this.last = null; this.count = 0; this.doneS = 0; this.hours = []; this.hoursS = []; this.starts = []; }
 
   private absorb(seg: [number, number, number, number], last: [number, number, number] | null, count: number): { last: [number, number, number] | null; count: number; added: boolean } {
     const p = this.p;
@@ -362,27 +393,45 @@ export class LabelEventTracker {
     const p = this.p;
     if (this.cur === null) { if (s >= p.on_thr) this.cur = [t, t, s, 1]; return; }
     if (s >= p.off_thr) { this.cur[1] = t; this.cur[2] = Math.max(this.cur[2], s); this.cur[3]++; return; }
+    const prev = this.last;
     const r = this.absorb(this.cur, this.last, this.count);
+    if (r.added && prev) { const d = prev[1] - prev[0] + this.frameS; this.doneS += d; bump(this.hours, this.hoursS, hourOf(prev[0]), d); } // `prev` can no longer change
     this.last = r.last; this.count = r.count; this.cur = null;
     if (r.added) { this.starts.push(r.last![0]); if (this.starts.length > this.maxTicks) this.starts.shift(); }
   }
 
   /** Events as the batch detector would report them for the frames so far (an open segment counts). */
-  view(): { count: number; last: LabelEvent | null; ticks: number[] } {
-    let last = this.last, count = this.count;
+  view(): LabelView {
+    let last = this.last, count = this.count, doneS = this.doneS;
+    const prev = this.last;
     const ticks = this.starts.slice();
+    const hours = this.hours.slice(), hoursS = this.hoursS.slice();
     if (this.cur) {
       const r = this.absorb(this.cur, last, count);
       last = r.last; count = r.count;
-      if (r.added) ticks.push(last![0]);
+      if (r.added) {
+        ticks.push(last![0]);
+        if (prev) { const d = prev[1] - prev[0] + this.frameS; doneS += d; bump(hours, hoursS, hourOf(prev[0]), d); }
+      }
     }
-    return { count, last: last ? { t_start: last[0], t_end: last[1], peak_score: last[2] } : null, ticks };
+    let total = doneS;
+    if (last) { const d = last[1] - last[0] + this.frameS; total += d; bump(hours, hoursS, hourOf(last[0]), d); }
+    return { count, last: last ? { t_start: last[0], t_end: last[1], peak_score: last[2] } : null, ticks, total_s: total, per_hour: hours, per_hour_s: hoursS };
   }
 }
 
-export function runLabelEvents(inp: { label: string; frames: [number, number][] }, params: AudioParams): { events: LabelEvent[]; count: number } {
-  const sections: Record<string, LabelEventParams> = { Cough: params.cough };
-  return detectLabelEvents(inp.frames, sections[inp.label]!);
+/** Label -> detector parameters: Cough (W4) plus the W10 labels of `audio_events` (carelens.audio.label_sections). */
+export function labelSections(params: { audio: AudioParams; audio_events: AudioEventsParams }): Record<string, LabelEventParams> {
+  const e = params.audio_events;
+  const out: Record<string, LabelEventParams> = { Cough: params.audio.cough };
+  for (const s of [e.snoring, e.screaming, e.crying, e.glass, e.thump, e.speech]) out[s.label] = s;
+  return out;
+}
+
+export function runLabelEvents(inp: { label: string; frames: [number, number][] }, params: { audio: AudioParams; audio_events: AudioEventsParams }): { events: LabelEvent[]; count: number; total_s: number; per_hour: number[]; per_hour_s: number[] } {
+  const res = detectLabelEvents(inp.frames, labelSections(params)[inp.label]!);
+  const sm = summarizeEvents(res.events, frameSeconds(params.audio));
+  return { ...res, total_s: sm.total_s, per_hour: sm.per_hour, per_hour_s: sm.per_hour_s };
 }
 
 /** Fixture runner for audio_envelope: int16 PCM (base64) -> envelope + clip fraction. */

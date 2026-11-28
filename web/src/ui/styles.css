@@ -107,3 +107,10 @@ progress { width: 100%; max-width: 640px; height: 12px; accent-color: var(--acce
 .pb-walking { fill: var(--exp); }
 .pb-lying { fill: var(--q-ok); }
 .pb-absent { fill: var(--muted); opacity: 0.55; }
+
+/* W10 night mode: dim page, minimal live view. Screen-only: the cards stay in the DOM and come back with "Show all cards". */
+html[data-night='on'] body { filter: brightness(0.45); background: #000; }
+html[data-night='on'] .results, html[data-night='on'] #not-offered { display: none; }
+html[data-night='on'][data-night-details='on'] .results, html[data-night='on'][data-night-details='on'] #not-offered { display: block; }
+.night-plug { font-weight: 700; font-size: 1.25rem; margin: 0 0 8px; }
+.night-summary { font-size: 1.05rem; overflow-wrap: anywhere; }

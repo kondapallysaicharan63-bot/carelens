@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -332,6 +332,40 @@
       "min_frames": 1,
       "merge_gap_s": 1.0,
       "refractory_s": 2.0
+    }
+  },
+  "audio_events": {
+    "corroborate_s": 10.0,
+    "cue_labels": ["Thump, thud", "Screaming", "Glass"],
+    "snoring": { "label": "Snoring", "on_thr": 0.35, "off_thr": 0.2, "min_frames": 2, "merge_gap_s": 3.0, "refractory_s": 0.0 },
+    "screaming": { "label": "Screaming", "on_thr": 0.5, "off_thr": 0.3, "min_frames": 1, "merge_gap_s": 2.0, "refractory_s": 5.0 },
+    "crying": { "label": "Crying, sobbing", "on_thr": 0.5, "off_thr": 0.3, "min_frames": 2, "merge_gap_s": 3.0, "refractory_s": 10.0 },
+    "glass": { "label": "Glass", "on_thr": 0.5, "off_thr": 0.3, "min_frames": 1, "merge_gap_s": 1.0, "refractory_s": 5.0 },
+    "thump": { "label": "Thump, thud", "on_thr": 0.5, "off_thr": 0.3, "min_frames": 1, "merge_gap_s": 1.0, "refractory_s": 3.0 },
+    "speech": { "label": "Speech", "on_thr": 0.5, "off_thr": 0.3, "min_frames": 2, "merge_gap_s": 2.0, "refractory_s": 0.0 }
+  },
+  "sleep_sounds": {
+    "pause_min_s": 10.0,
+    "pause_max_s": 60.0,
+    "pre_regular_s": 60.0,
+    "pre_min_bumps": 6,
+    "pre_cv_max": 0.3,
+    "rate_min_bpm": 6.0,
+    "rate_max_bpm": 30.0,
+    "min_valid_regular_s": 1800.0,
+    "speech_thr": 0.5,
+    "overlap_margin_s": 1.0,
+    "bump": {
+      "smooth_s": 0.3,
+      "floor_win_s": 15.0,
+      "rise_on_log10": 0.25,
+      "rise_off_frac": 0.5,
+      "min_bump_s": 0.3,
+      "max_bump_s": 12.0,
+      "merge_s": 1.9,
+      "silence_log10": -9.0,
+      "spike_ratio": 2.0,
+      "typ_bumps": 4
     }
   }
 }

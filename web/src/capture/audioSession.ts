@@ -4,13 +4,29 @@
 // Not a medical device.
 import params from '../../../shared/params.json';
 import {
-  BreathSoundRate, EnvelopeStream, LabelEventTracker, Resampler, assertAudioParams, type AudioParams,
-  type BreathSoundUpdate, type LabelEvent,
+  BreathSoundRate, EnvelopeStream, LabelEventTracker, Resampler, assertAudioParams, frameSeconds, type AudioEventsParams, type AudioParams,
+  type BreathSoundUpdate, type LabelEvent, type LabelView,
 } from '../core/audio';
+import { PauseTracker, assertSleepParams, type PauseView, type SleepSoundsParams } from '../core/sleepSounds';
 import type { YamnetHandle } from './yamnet';
 
 export const AUDIO_PARAMS = assertAudioParams(params.audio as AudioParams);
+export const EVENT_PARAMS = params.audio_events as AudioEventsParams;
+export const SLEEP_PARAMS = params.sleep_sounds as SleepSoundsParams;
+assertSleepParams(EVENT_PARAMS, SLEEP_PARAMS);
+/** the four W10 distress-sound labels, in display order (Screaming, Crying/sobbing, Glass, Thump/thud) */
+export const DISTRESS_SECTIONS = [EVENT_PARAMS.screaming, EVENT_PARAMS.crying, EVENT_PARAMS.glass, EVENT_PARAMS.thump] as const;
 const BASE = import.meta.env.BASE_URL;
+
+/** W10 sound results after every YAMNet frame (all counts only grow within a session) */
+export interface SoundsView {
+  /** stream time of the frame (s) */
+  t: number;
+  snoring: LabelView;
+  talking: LabelView;
+  distress: { label: string; view: LabelView }[];
+  pauses: PauseView;
+}
 
 export interface AudioHooks {
   /** per block: RMS and peak of the (16 kHz) signal, both in [0, 1] */
@@ -21,6 +37,8 @@ export interface AudioHooks {
   /** the microphone stopped delivering audio (true) / is delivering again (false); every session emits its initial state */
   onNoMic(dead: boolean): void;
   onYamnet(state: 'loading' | 'ready' | 'failed', msg?: string): void;
+  /** W10: snoring, talking time, distress sounds and possible pauses in breathing sounds (every new YAMNet frame) */
+  onSounds?(v: SoundsView): void;
 }
 
 /** Browser objects the session needs; replaceable in tests. */
@@ -44,6 +62,10 @@ export class AudioSession {
   private readonly env = new EnvelopeStream(AUDIO_PARAMS);
   private readonly breath = new BreathSoundRate(AUDIO_PARAMS);
   private readonly cough = new LabelEventTracker(AUDIO_PARAMS.cough);
+  private readonly snoring = new LabelEventTracker(EVENT_PARAMS.snoring, 500, frameSeconds(AUDIO_PARAMS));
+  private readonly talking = new LabelEventTracker(EVENT_PARAMS.speech, 500, frameSeconds(AUDIO_PARAMS));
+  private readonly distress = DISTRESS_SECTIONS.map((p) => ({ p, tracker: new LabelEventTracker(p, 100, frameSeconds(AUDIO_PARAMS)) }));
+  private readonly pause = new PauseTracker(SLEEP_PARAMS, AUDIO_PARAMS.fs_hz / AUDIO_PARAMS.envelope.hop);
   private yamnet: YamnetHandle | null = null;
   private ended = false;
   private readonly ring = new Float32Array(AUDIO_PARAMS.yamnet.window_samples);
@@ -56,7 +78,9 @@ export class AudioSession {
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private dead = false;
 
-  constructor(private readonly hooks: AudioHooks, private readonly deps: AudioDeps = REAL_DEPS) {}
+  /** `offsetS`: session time at which this audio session starts. The W10 sound trackers (snoring, talking, distress, pauses) run on session
+   *  time, so their per-hour buckets stay right across audio restarts; the breathing and cough results keep stream time. */
+  constructor(private readonly hooks: AudioHooks, private readonly deps: AudioDeps = REAL_DEPS, private readonly offsetS = 0) {}
 
   get isEnded(): boolean { return this.ended; }
 
@@ -91,7 +115,7 @@ export class AudioSession {
       const dead = this.deps.nowMs() - this.lastBlockMs > 1500 || track.readyState === 'ended';
       if (dead !== this.dead) {
         this.dead = dead;
-        if (dead) this.breath.reset();
+        if (dead) { this.breath.reset(); this.pause.breakStream(); }
         this.hooks.onNoMic(dead);
       }
     }, 500);
@@ -150,6 +174,7 @@ export class AudioSession {
     for (const f of this.env.push(x)) {
       const u = this.breath.push(f.t, f.env, f.clip);
       if (u) this.hooks.onBreath(u);
+      if (this.yamnet) this.pause.pushFrame(this.offsetS + f.t, f.env); // without the sound model speech cannot be told apart from breathing: no pause counting
     }
     this.feedYamnet(x);
   }
@@ -174,12 +199,24 @@ export class AudioSession {
     const h = this.yamnet;
     if (!h) return;
     try {
-      const sc = h.classify(this.win, [AUDIO_PARAMS.cough.label, AUDIO_PARAMS.yamnet.speech_label]);
-      this.breath.pushSpeech(tEnd, sc[AUDIO_PARAMS.yamnet.speech_label]!);
+      const labels = [AUDIO_PARAMS.cough.label, AUDIO_PARAMS.yamnet.speech_label, EVENT_PARAMS.snoring.label, ...DISTRESS_SECTIONS.map((p) => p.label)];
+      const sc = h.classify(this.win, labels, tEnd);
+      const speech = sc[AUDIO_PARAMS.yamnet.speech_label]!;
+      this.breath.pushSpeech(tEnd, speech);
+      const ts = this.offsetS + tEnd;
+      this.pause.pushSpeech(ts, speech);
       this.cough.push(tEnd, sc[AUDIO_PARAMS.cough.label]!);
+      this.snoring.push(ts, sc[EVENT_PARAMS.snoring.label] ?? 0);
+      this.talking.push(ts, speech);
+      for (const d of this.distress) d.tracker.push(ts, sc[d.p.label] ?? 0);
       this.hooks.onCough({ ...this.cough.view(), t: tEnd });
+      this.hooks.onSounds?.({
+        t: ts, snoring: this.snoring.view(), talking: this.talking.view(),
+        distress: this.distress.map((d) => ({ label: d.p.label, view: d.tracker.view() })), pauses: this.pause.view(),
+      });
     } catch (err) {
       this.yamnet = null;
+      this.pause.breakStream();
       try { h.close(); } catch { /* already closed */ }
       this.hooks.onYamnet('failed', err instanceof Error ? err.message : String(err));
     }

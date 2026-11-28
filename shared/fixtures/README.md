@@ -61,3 +61,9 @@ W3 `pose_chain`: `track_dropout_fill`, `track_enter_hysteresis`, `track_fast_fal
 `rppg_clean_{light_72,medium_90,dark_60}bpm` (synthetic skin-tone profiles, a documented approximation, not evidence about people), `rppg_motion_burst`, `rppg_lighting_step`, `rppg_face_lost`, `rppg_small_face`, `rppg_skin_filter`, `rppg_disagree_flicker` (POS vs CHROM disagree: withheld).
 
 W4 audio (synthetic only; no recordings of people): `audio_envelope_shaped_noise`; `audio_breath_{8,12,18}bpm` and `audio_breath_30bpm` (one broad bump per breath: reported, though 8 and 12 have a few `ambiguous` windows with few bumps), `audio_breath_double_peaks_15bpm` (inhale and exhale bumps alternate in loudness: the true 15/min is reported, never 30), `audio_breath_double_equal_15bpm` (two equal short bumps per breath: withheld as `ambiguous`, never 2x or 1/2x), `audio_breath_talking` (withheld as `talking` until the speech leaves the window), `audio_breath_too_quiet`, `audio_breath_clipping`; `audio_cough_{single,bout_merge,borderline_hysteresis,sustained_noise,speech_only}`.
+
+## W10 sound fixtures
+
+`audio_snoring_*`, `audio_distress_*`, `audio_speech_spells` (level `audio_label_events`, now also `total_s`, `per_hour`, `per_hour_s`),
+`sleep_*` (levels `sleep_bumps` / `sleep_env`: possible pauses in breathing sounds; counts and flags exact, times within 0.05 s) and
+`sound_cue_corroboration` (level `sound_cue`: flags exact). Synthetic signals only.

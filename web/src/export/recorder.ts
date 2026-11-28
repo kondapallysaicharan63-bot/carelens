@@ -47,7 +47,7 @@ export interface SessionSummary {
   duration_s: number;
   /** median of REPORTED values per metric (null when none) */
   medians: Partial<Record<Metric, number | null>>;
-  counts: { possible_fall: number; inactivity: number; cough: number };
+  counts: { possible_fall: number; inactivity: number; cough: number; distress_sound: number; possible_pause: number };
 }
 
 export class SessionRecorder {
@@ -82,7 +82,7 @@ export class SessionRecorder {
   }
 
   /** `agoS`: the event began that many seconds before it was raised. */
-  addEvent(e: { kind: EventRow['kind']; agoS?: number; peak_score?: number; trigger?: string; durationS?: number }): EventRow | null {
+  addEvent(e: { kind: EventRow['kind']; agoS?: number; peak_score?: number; trigger?: string; durationS?: number; merged_into_fall?: boolean }): EventRow | null {
     if (this.events.length >= MAX_EVENTS) { this.truncated = true; return null; }
     const t = r3(this.now());
     const row: EventRow = { t, wall: this.wall(t), kind: e.kind };
@@ -90,6 +90,7 @@ export class SessionRecorder {
     if (e.durationS !== undefined && row.t_onset !== undefined) row.t_end = r3(row.t_onset + Math.max(0, e.durationS));
     if (e.peak_score !== undefined) row.peak_score = r3(Math.min(1, Math.max(0, e.peak_score)));
     if (e.trigger) row.trigger = e.trigger.slice(0, 40);
+    if (e.merged_into_fall) row.merged_into_fall = true;
     this.events.push(row);
     return row;
   }
@@ -136,7 +137,9 @@ export class SessionRecorder {
   }
 
   /** Update a stored event (a cough that is still going on / merged with the next sound). */
-  updateEvent(row: EventRow, patch: { t_end?: number; peak_score?: number }): void {
+  updateEvent(row: EventRow, patch: { t_end?: number; peak_score?: number; sound_cue?: boolean; merged_into_fall?: boolean }): void {
+    if (patch.sound_cue !== undefined) row.sound_cue = patch.sound_cue;
+    if (patch.merged_into_fall !== undefined) row.merged_into_fall = patch.merged_into_fall;
     if (patch.t_end !== undefined) row.t_end = r3(Math.max(0, patch.t_end));
     if (patch.peak_score !== undefined) row.peak_score = r3(Math.min(1, Math.max(0, patch.peak_score)));
   }
@@ -165,7 +168,7 @@ export class SessionRecorder {
     const count = (k: EventRow['kind']): number => this.events.filter((e) => e.kind === k).length;
     return {
       id: isoWithOffset(this.startedMs, 0), started_at: isoWithOffset(this.startedMs, this.tzOffsetMin),
-      duration_s: Math.round(this.endT ?? last), medians, counts: { possible_fall: count('possible_fall'), inactivity: count('inactivity'), cough: count('cough') },
+      duration_s: Math.round(this.endT ?? last), medians, counts: { possible_fall: count('possible_fall'), inactivity: count('inactivity'), cough: count('cough'), distress_sound: count('distress_sound'), possible_pause: count('possible_pause') },
     };
   }
 }

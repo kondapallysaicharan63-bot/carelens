@@ -456,6 +456,103 @@ class Audio(_M):
         return self
 
 
+class AudioEvents(_M):
+    """W10 per-label YAMNet event detectors (snoring, distress sounds, speech) and the fall/sound corroboration window."""
+    corroborate_s: float
+    cue_labels: List[str]
+    snoring: LabelEvents
+    screaming: LabelEvents
+    crying: LabelEvents
+    glass: LabelEvents
+    thump: LabelEvents
+    speech: LabelEvents
+
+    def sections(self) -> List[LabelEvents]:
+        return [self.snoring, self.screaming, self.crying, self.glass, self.thump, self.speech]
+
+    @model_validator(mode="after")
+    def _check(self) -> "AudioEvents":
+        errs = audio_events_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
+def audio_events_errors(p: dict) -> List[str]:
+    """Consistency checks for ``audio_events`` (mirrored by audioEventsErrors in web/src/core/sleepSounds.ts)."""
+    e: List[str] = []
+    secs = [p[k] for k in ("snoring", "screaming", "crying", "glass", "thump", "speech")]
+    for k in ("snoring", "screaming", "crying", "glass", "thump", "speech"):
+        s = p[k]
+        if not 0 < s["off_thr"] <= s["on_thr"] <= 1 or s["min_frames"] < 1 or s["merge_gap_s"] < 0 or s["refractory_s"] < 0:
+            e.append(f"{k}: need 0 < off_thr <= on_thr <= 1, min_frames >= 1, merge_gap_s/refractory_s >= 0")
+    labels = [s["label"] for s in secs]
+    if any(not l for l in labels) or len(set(labels)) != len(labels):
+        e.append("section labels must be non-empty and distinct")
+    if not p["corroborate_s"] > 0:
+        e.append("corroborate_s must be > 0")
+    if not p["cue_labels"] or any(l not in labels for l in p["cue_labels"]):
+        e.append("cue_labels must be a non-empty subset of the section labels")
+    return e
+
+
+class SleepBump(_M):
+    smooth_s: float
+    floor_win_s: float
+    rise_on_log10: float
+    rise_off_frac: float
+    min_bump_s: float
+    max_bump_s: float
+    merge_s: float
+    silence_log10: float
+    spike_ratio: float
+    typ_bumps: int
+
+
+class SleepSounds(_M):
+    """W10 possible pauses in breathing sounds (carelens/sleep_sounds.py)."""
+    pause_min_s: float
+    pause_max_s: float
+    pre_regular_s: float
+    pre_min_bumps: int
+    pre_cv_max: float
+    rate_min_bpm: float
+    rate_max_bpm: float
+    min_valid_regular_s: float
+    speech_thr: float
+    overlap_margin_s: float
+    bump: SleepBump
+
+    @model_validator(mode="after")
+    def _check(self) -> "SleepSounds":
+        errs = sleep_sounds_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
+def sleep_sounds_errors(p: dict) -> List[str]:
+    """Consistency checks for ``sleep_sounds`` (mirrored by sleepSoundsErrors in web/src/core/sleepSounds.ts)."""
+    e: List[str] = []
+    b = p["bump"]
+    if not 0 < p["pause_min_s"] < p["pause_max_s"]:
+        e.append("need 0 < pause_min_s < pause_max_s")
+    if not (p["pre_regular_s"] > 0 and p["pre_min_bumps"] >= 3 and 0 < p["pre_cv_max"] < 1 and p["min_valid_regular_s"] > 0):
+        e.append("need pre_regular_s > 0, pre_min_bumps >= 3, 0 < pre_cv_max < 1, min_valid_regular_s > 0")
+    if not 0 < p["rate_min_bpm"] < p["rate_max_bpm"]:
+        e.append("need 0 < rate_min_bpm < rate_max_bpm")
+    if not (0 <= p["speech_thr"] <= 1 and p["overlap_margin_s"] >= 0):
+        e.append("need 0 <= speech_thr <= 1 and overlap_margin_s >= 0")
+    if not (b["smooth_s"] > 0 and b["rise_on_log10"] > 0 and 0 < b["rise_off_frac"] < 1 and 0 < b["min_bump_s"] < b["max_bump_s"]
+            and b["spike_ratio"] > 1 and b["typ_bumps"] >= 1):
+        e.append("bump: need smooth_s > 0, rise_on_log10 > 0, 0 < rise_off_frac < 1, 0 < min_bump_s < max_bump_s, spike_ratio > 1, typ_bumps >= 1")
+    if not 0 <= b["merge_s"] <= 60.0 / max(p["rate_max_bpm"], 1e-9):
+        e.append("bump.merge_s must be in [0, 60 / rate_max_bpm] (in-band breaths are never merged)")
+    if p["rate_min_bpm"] > 0 and not b["floor_win_s"] >= 60.0 / p["rate_min_bpm"]:
+        e.append("bump.floor_win_s must cover at least one slowest breath (>= 60 / rate_min_bpm)")
+    return e
+
+
 def mobility_errors(p: dict) -> List[str]:
     """Consistency checks for ``mobility`` (mirrored by mobilityErrors in web/src/core/mobility.ts)."""
     e: List[str] = []
@@ -691,6 +788,8 @@ class Params(_M):
     activity: Activity
     mobility: Mobility
     audio: Audio
+    audio_events: AudioEvents
+    sleep_sounds: SleepSounds
 
 
 def load_params(path: Path | str = PARAMS_PATH) -> Params:

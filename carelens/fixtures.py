@@ -38,6 +38,7 @@ from .blink import run_blink, synth_face
 from .events import ActivitySummary, ActivityTimeline
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 from . import audio as AU
+from . import sleep_sounds as SL
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "shared" / "fixtures"
 DP = 6
@@ -193,6 +194,9 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "audio_envelope": AU.run_audio_envelope,
     "audio_breath_env": AU.run_breath_env,
     "audio_label_events": AU.run_label_events,
+    "sleep_bumps": SL.run_sleep_bumps,
+    "sleep_env": SL.run_sleep_env,
+    "sound_cue": SL.run_sound_cue,
     "mobility": run_mobility,
     "tremor": run_tremor,
     "blink": run_blink,
@@ -209,7 +213,8 @@ TOL_RPPG = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
 TOL_AUDIO_ENV = {"env_log10": 1e-4, "reported": "exact"}
 TOL_BREATH_SOUND = {"bpm": 0.3, "quality": 0.03, "t_s": 0.05, "snr": 0.05,
                     "reported": "exact", "reason": "exact", "update_count": "exact"}
-TOL_AUDIO_EVENTS = {"event_count": "exact", "t_start": "exact", "t_end": "exact", "peak_score": "exact"}
+TOL_AUDIO_EVENTS = {"event_count": "exact", "t_start": "exact", "t_end": "exact", "peak_score": "exact", "t_s": 0.05}
+TOL_SLEEP = {"sleep_time_s": 0.05, "sleep_rate": 0.05, "count": "exact", "no_sound_gaps": "exact", "cues": "exact"}
 TOL_MOBILITY = {"mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0, "quality": 0.05,
                 "reported": "exact", "reason": "exact", "reps": "exact", "partial_rises": "exact", "stands": "exact",
                 "n_segments": "exact", "n_not_side_on": "exact", "rep_in_progress": "exact"}
@@ -408,6 +413,154 @@ def _audio_fixtures() -> list:
                 {i: 0.1 + 0.35 * abs(np.sin(i * 0.37)) * abs(np.cos(i * 0.11)) for i in range(125)}, 504),
         _scores("audio_cough_speech_only", "Someone talking: Cough scores stay low with a few 0.25-0.35 blips. No events.", 62,
                 {10: 0.25, 11: 0.35, 25: 0.3, 40: 0.28, 41: 0.33}, 505),
+    ]
+
+
+def _label_frames(name, desc, label, frames):
+    """Label-event fixture from explicit (possibly sparse) ``[t, score]`` frames."""
+    return _fixture(name, desc, "audio_label_events", {"label": label, "frames": [[round(t, 6), round(v, 6)] for t, v in frames]}, TOL_AUDIO_EVENTS)
+
+
+def _sleep_bumps(name, desc, bumps, spikes=None, speech=None):
+    inp: dict = {"bumps": [round(b, 3) for b in bumps]}
+    if spikes:
+        inp["spikes"] = [[round(a, 3), round(b, 3)] for a, b in spikes]
+    if speech:
+        inp["speech"] = [[round(t, 3), round(v, 3)] for t, v in speech]
+    return _fixture(name, desc, "sleep_bumps", inp, TOL_SLEEP)
+
+
+def _regular_bumps(t0, t1, bpm=14.0, seed=0, jit=0.1, irregular=0.0):
+    """Breath-bump times at ``bpm`` in [t0, t1) with small timing jitter (sd ``jit`` s); ``irregular`` shifts each by +-that x period.
+    The first bump is exactly at ``t0`` (so a gap before it is exact)."""
+    rng = np.random.default_rng(seed)
+    per = 60.0 / bpm
+    n = int(math.floor((t1 - t0) / per))
+    out = [t0 + k * per + float(rng.normal(0.0, jit)) + float(rng.uniform(-irregular, irregular)) * per for k in range(n)]
+    out[0] = t0
+    return out
+
+
+def _with_gaps(spans, gaps, bpm=14.0, seed=0, irregular=0.0):
+    """Consecutive regular stretches of the given lengths (s) separated by exact peak-to-peak gaps (s)."""
+    out: list = []
+    t = 0.0
+    for i, ln in enumerate(spans):
+        seg = _regular_bumps(t, t + ln, bpm, seed + i, irregular=irregular if i == 0 else 0.0)
+        out += seg
+        t = seg[-1] + (gaps[i] if i < len(gaps) else 0.0)
+    return out
+
+
+def _speech_frames(dur, t_a, t_b, seed=0):
+    rng = np.random.default_rng(seed)
+    hop = PARAMS.audio.yamnet.hop_samples / PARAMS.audio.fs_hz
+    return [[AU.YAMNET_WINDOW_S + i * hop,
+             float(np.clip((0.8 if t_a <= AU.YAMNET_WINDOW_S + i * hop < t_b else 0.02) + abs(rng.normal(0, 0.05)), 0, 1))]
+            for i in range(int((dur - AU.YAMNET_WINDOW_S) / hop))]
+
+
+def _sleep_env(name, desc, dur, gaps=(), seed=0, speech=None, bursts=(), irregular=(), pair=None, width=0.5, head_silence=0.0):
+    fs = PARAMS.audio.fs_hz / PARAMS.audio.envelope.hop
+    starts = SL.synth_breath_starts(dur, 14.0, gaps, seed=seed, irregular=irregular)
+    env = SL.synth_envelope_from_starts(starts, dur, seed=seed, bursts=bursts, pair=pair, width=width)
+    if head_silence:
+        env[:int(head_silence * fs)] = -12.0   # digital silence before the input starts delivering sound (log10 of the eps floor)
+    inp: dict = {"fs_env": fs, "env": [round(float(v), 3) for v in env]}
+    if speech is not None:
+        inp["speech"] = [[round(t, 3), round(v, 3)] for t, v in _speech_frames(dur, speech[0], speech[1], seed + 1000)]
+    return _fixture(name, desc, "sleep_env", inp, TOL_SLEEP)
+
+
+def _cue_fixture():
+    thud = lambda a: {"label": "Thump, thud", "t_start": a, "t_end": a + 1.0}
+    falls = [{"t_onset": 100.0 + 200.0 * i, "t_confirmed": 120.0 + 200.0 * i} for i in range(7)]
+    sounds = [thud(124.0),                                                       # 4 s after the check-in: cue
+              thud(340.0),                                                       # 20 s after: no cue
+              {"label": "Screaming", "t_start": 492.0, "t_end": 494.0},          # 8 s before the onset: cue
+              {"label": "Crying, sobbing", "t_start": 705.0, "t_end": 712.0},    # not a cue label: no cue
+              {"label": "Glass", "t_start": 930.0, "t_end": 931.0},              # exactly corroborate_s after: cue
+              {"label": "Cough", "t_start": 1105.0, "t_end": 1106.0},            # not a cue label: no cue
+              thud(1330.5)]                                                      # 0.5 s outside the window: no cue
+    return _fixture("sound_cue_corroboration",
+                    "Seven possible falls and sounds: a thud 4 s after a fall check-in, a scream 8 s before another and a glass sound exactly "
+                    "10 s after one corroborate them; a thud 20 s after, crying, a cough and a thud 10.5 s after do not.",
+                    "sound_cue", {"falls": falls, "sounds": sounds}, TOL_SLEEP)
+
+
+def _sleep_fixtures() -> list:
+    one = _with_gaps([80, 65], [15.0], seed=1)                       # one exact 15 s gap after ~80 s
+    long_ = _with_gaps([300, 285, 385, 485, 885], [15.0, 16.0, 15.0, 17.0], seed=40)   # 40 min, four 15-17 s pauses
+    short = _with_gaps([150, 164, 174, 65], [16.0, 16.0, 15.0], seed=20)                # 10 min, three pauses
+    bound = _with_gaps([90, 90, 90, 90, 90], [9.5, 10.5, 59.5, 60.5], seed=60)          # only 10.5 and 59.5 count
+    fs = PARAMS.audio.fs_hz / PARAMS.audio.envelope.hop
+    return [
+        _sleep_bumps("sleep_pause_single", "Regular breathing sounds at 14/min with one 15 s gap after 80 s, then breathing resumes: one possible pause. "
+                     "The per-hour figure is withheld (under 30 min of regular breathing).", one),
+        _sleep_bumps("sleep_silence_90s", "Regular breathing, then 90 s without any breathing sounds (moved or left), then breathing: not a pause, "
+                     "counted as no breathing sounds.", _with_gaps([80, 70], [90.0], seed=3)),
+        _sleep_bumps("sleep_gap_during_speech", "The 15 s gap is filled by talking (YAMNet Speech high): not counted.", one,
+                     speech=_speech_frames(160, 81.0, 94.0, 5)),
+        _sleep_bumps("sleep_gap_with_spike", "The 15 s gap contains a loud non-breath burst (a cough or a bump of the bed): not counted.", one,
+                     spikes=[(84.0, 86.0)]),
+        _sleep_bumps("sleep_irregular_before", "Irregular breathing (timing off by up to 45 %) before a 15 s gap: the gap does not count.",
+                     _with_gaps([80, 65], [15.0], seed=6, irregular=0.45)),
+        _sleep_bumps("sleep_short_regular_before", "Only 35 s of breathing before a 15 s gap (fewer than 60 s of regular breathing): not counted.",
+                     _with_gaps([35, 70], [15.0], seed=8)),
+        _sleep_bumps("sleep_multiple_pauses_short", "10 min with three 15-16 s gaps: count 3, but the per-hour rate is withheld (under 30 min of regular breathing).", short),
+        _sleep_bumps("sleep_multiple_pauses_30min", "40 min with four 15-17 s gaps: count 4 and, with over 30 min of regular breathing, a per-hour rate.", long_),
+        _sleep_bumps("sleep_gap_boundaries", "Gaps of 9.5 s (too short), 10.5 s and 59.5 s (counted) and 60.5 s (no breathing sounds, not counted).", bound),
+        _sleep_env("sleep_env_pause", "Envelope level: 14/min breath bumps with one ~20 s gap (four breaths missing) after 80 s: one possible pause.",
+                   160, gaps=[(80.0, 95.0)], seed=11),
+        _sleep_env("sleep_env_inhale_exhale", "Envelope level: every breath is an inhale bump and a louder exhale bump 1.7 s later (two bumps per breath, "
+                   "sometimes merged): the pair counts as one breath, so a gap after 80 s is one possible pause.",
+                   160, gaps=[(80.0, 95.0)], seed=16, pair=(1.7, 0.9, 1.8), width=0.28),
+        _sleep_env("sleep_env_startup_silence", "Envelope level: 6 s of digital silence (an input that has just started), then breathing with one gap after 80 s: "
+                   "the silence must not set the floor, so the pause is still found.", 160, gaps=[(80.0, 95.0)], seed=17, head_silence=6.0),
+        _sleep_env("sleep_env_silence_90s", "Envelope level: 90 s with no breath bumps: no pause, one no-breathing-sounds gap.",
+                   230, gaps=[(80.0, 170.0)], seed=12),
+        _sleep_env("sleep_env_gap_speech", "Envelope level: the gap is filled with talking (YAMNet Speech high): not counted.",
+                   160, gaps=[(80.0, 95.0)], seed=13, speech=(81.0, 94.0)),
+        _sleep_env("sleep_env_gap_burst", "Envelope level: a loud burst (cough-like, +2.5 log10) inside the gap: not counted.",
+                   160, gaps=[(80.0, 95.0)], seed=14, bursts=[(84.0, 86.0, 2.5)]),
+        _sleep_env("sleep_env_irregular", "Envelope level: irregular breathing before a gap: not counted.",
+                   160, gaps=[(80.0, 95.0)], seed=15, irregular=[(0.0, 80.0)]),
+        _cue_fixture(),
+    ]
+
+
+def _w10_label_fixtures() -> list:
+    hop = 0.48
+    t = lambda i: AU.YAMNET_WINDOW_S + i * hop
+    snore = {i: 0.55 + 0.2 * abs(math.sin(i * 0.7)) for i in range(10, 30)}
+    snore.update({18: 0.12, 19: 0.1, 20: 0.15, 21: 0.1})          # a 1.9 s dip: closes the segment, merged back (merge gap 3 s)
+    snore.update({50: 0.6, 51: 0.5, 52: 0.4, 53: 0.25})            # a second episode
+    snore.update({70: 0.9})                                         # a single frame: shorter than min_frames
+    scream = {20: 0.3, 21: 0.8, 22: 0.9, 23: 0.5, 24: 0.2, 28: 0.7, 40: 0.95, 41: 0.6}   # frames 21-23, 28 (merged, 2 s), and 40-41
+    crying = {i: 0.45 + 0.25 * abs(math.sin(i)) for i in range(15, 35)}
+    crying.update({5: 0.7, 45: 0.8})                                # single frames: shorter than min_frames
+    speech = {i: 0.7 for i in range(6, 20)}
+    speech.update({10: 0.1, 11: 0.1, 12: 0.4})                      # 0.96 s dip: one segment, one talking spell
+    speech.update({i: 0.65 for i in range(40, 60)})
+    speech.update({30: 0.8})                                        # a single frame: ignored
+    mid = 3600.0
+    return [
+        _scores("audio_snoring_episodes", "Snoring scores: one long episode with a 1.9 s dip (merged), a short second one, and a single "
+                "high frame (ignored). Two events, total time from the frames.", 90, snore, 701, label="Snoring"),
+        _scores("audio_snoring_none", "Quiet room with a few low Snoring scores: no events.", 62, {10: 0.22, 11: 0.3, 40: 0.25}, 702, label="Snoring"),
+        _scores("audio_distress_screaming", "Screaming scores: a burst, a second burst 2.4 s later (inside the 5 s refractory time: merged), and a "
+                "later burst. Two events.", 62, scream, 703, label="Screaming"),
+        _scores("audio_distress_crying", "Crying, sobbing scores that wobble 0.45-0.7 for ~10 s (hysteresis keeps it one event) and two single frames "
+                "(ignored). One event.", 62, crying, 704, label="Crying, sobbing"),
+        _scores("audio_distress_glass", "One short burst of Glass scores: one event.", 40, {10: 0.4, 11: 0.8, 12: 0.5}, 705, label="Glass"),
+        _scores("audio_distress_thump", "One thump (a short burst) and one more 7 s later: two events.", 40, {10: 0.7, 11: 0.4, 25: 0.9}, 706, label="Thump, thud"),
+        _scores("audio_speech_spells", "Speech scores: one spell with a 0.96 s dip (one talking spell), a single frame (ignored) and a long second spell. "
+                "Two events; total talking time from the frames.", 70, speech, 707, label="Speech"),
+        _label_frames("audio_snoring_per_hour", "Snoring episodes in the first, second and third session hour (sparse score frames): per-hour counts [1, 2, 1].",
+                      "Snoring", [(100.0 + 0.48 * i, 0.7) for i in range(6)] + [(103.0, 0.05)]
+                      + [(mid + 100.0 + 0.48 * i, 0.7) for i in range(4)] + [(mid + 103.0, 0.05)]
+                      + [(mid + 200.0 + 0.48 * i, 0.7) for i in range(4)] + [(mid + 203.0, 0.05)]
+                      + [(2 * mid + 50.0 + 0.48 * i, 0.7) for i in range(5)] + [(2 * mid + 53.0, 0.05)]),
     ]
 
 
@@ -612,7 +765,7 @@ def generate_all() -> dict[str, str]:
         _rppg("rppg_disagree_flicker",
               "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
               32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
-    ] + _audio_fixtures() + _mobility_fixtures() + _tremor_fixtures() + _blink_fixtures() + _activity_fixtures()
+    ] + _audio_fixtures() + _w10_label_fixtures() + _sleep_fixtures() + _mobility_fixtures() + _tremor_fixtures() + _blink_fixtures() + _activity_fixtures()
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
 
@@ -622,7 +775,7 @@ def generate_all() -> dict[str, str]:
 _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": "event_time_s",
              "t_confirmed": "event_time_s", "torso_angle_deg": "torso_angle_deg", "motion": "motion",
              "bpm": "bpm", "bpm_ibi": "bpm", "bpm_chrom": "bpm", "rmssd_ms": "hrv_ms", "sdnn_ms": "hrv_ms", "mean_hr_bpm": "bpm", "final_ibis_ms": "ibi_ms", "snr": "snr", "pi": "pi",
-             "envelope": "env_log10"}
+             "envelope": "env_log10", "total_s": "t_s", "per_hour_s": "t_s"}
 # mobility fixtures only (scoped by input_level so cough onsets, HRV durations etc. keep their exact comparison)
 _MOB_TOL_KEYS = {"time_s": "mob_time_s", "rep_times_s": "mob_time_s", "rise": "mob_time_s", "walk_out": "mob_time_s", "turn_1": "mob_time_s",
                  "walk_back": "mob_time_s", "turn_2": "mob_time_s", "sit": "mob_time_s", "t_start": "mob_time_s", "duration_s": "mob_time_s",
@@ -635,9 +788,12 @@ _BLINK_TOL_KEYS = {"t_start": "blink_t_s", "t_end": "blink_t_s", "t": "blink_t_s
 # activity fixtures: every seconds figure (posture buckets, active / still / absent / longest still)
 _ACTIVITY_TOL_KEYS = {k: "act_time_s" for k in ("sitting", "standing", "walking", "lying", "absent", "active_s", "still_s", "absent_s",
                                                  "total_s", "longest_still_s", "active_min")}
+# sleep-sound fixtures: counts / flags exact (no entry), times within 0.05 s
+_SLEEP_TOL_KEYS = {"t_start": "sleep_time_s", "t_end": "sleep_time_s", "duration_s": "sleep_time_s", "regular_s": "sleep_time_s",
+                   "rate_per_h": "sleep_rate"}
 _TOL_RELATIVE = {"amp_rel"}
 _TOL_DEFAULTS = {"blink_t_s": 0.05, "blink_rate": 0.05, "perclos": 0.005, "ear": 0.005, "window_s": 0.1, "act_time_s": 0.1, "freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
-                 "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4, "mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0}
+                 "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4, "sleep_time_s": 0.05, "sleep_rate": 0.05, "mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 
 
@@ -650,7 +806,8 @@ def compare_outputs(fx: dict, actual, expected=None) -> list[str]:
     tol = fx["tolerance"]
     errs: list[str] = []
 
-    keys = {"mobility": _MOB_TOL_KEYS, "tremor": _TREMOR_TOL_KEYS, "blink": _BLINK_TOL_KEYS, "activity": _ACTIVITY_TOL_KEYS}.get(fx.get("input_level"), _TOL_KEYS)
+    keys = {"mobility": _MOB_TOL_KEYS, "tremor": _TREMOR_TOL_KEYS, "blink": _BLINK_TOL_KEYS, "activity": _ACTIVITY_TOL_KEYS,
+            "sleep_bumps": _SLEEP_TOL_KEYS, "sleep_env": _SLEEP_TOL_KEYS, "sound_cue": _SLEEP_TOL_KEYS}.get(fx.get("input_level"), _TOL_KEYS)
 
     def tol_for(field, e=0.0):
         key = keys.get(field)

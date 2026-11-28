@@ -350,10 +350,121 @@ def detect_label_events(frames: Sequence[Sequence[float]], p: LabelEvents = PARA
     return {"events": [{"t_start": a, "t_end": b, "peak_score": c} for a, b, c in events], "count": len(events)}
 
 
+MAX_HOURS = 72   # per-hour buckets kept (session hours); later events fall into the last bucket
+
+
+def frame_s(p: Audio = PARAMS.audio) -> float:
+    """Time one YAMNet frame stands for (the native hop): an event's duration is ``t_end - t_start + frame_s``."""
+    return p.yamnet.hop_samples / p.fs_hz
+
+
+def summarize_events(events: Sequence[dict], fr_s: Optional[float] = None) -> dict:
+    """``{count, total_s, per_hour, per_hour_s}`` of detected events: total duration (each event ``t_end - t_start + frame_s``) and
+    the dense lists of event counts and seconds per SESSION hour (index = floor(t_start / 3600), at most ``MAX_HOURS`` buckets)."""
+    fr = frame_s() if fr_s is None else fr_s
+    per: list[int] = []
+    per_s: list[float] = []
+    total = 0.0
+    for e in events:
+        d = e["t_end"] - e["t_start"] + fr
+        total += d
+        _bump(per, per_s, min(MAX_HOURS - 1, max(0, int(math.floor(e["t_start"] / 3600.0)))), d)
+    return {"count": len(events), "total_s": total, "per_hour": per, "per_hour_s": per_s}
+
+
+def _bump(per: list, per_s: list, h: int, d: float) -> None:
+    per += [0] * (h + 1 - len(per))
+    per_s += [0.0] * (h + 1 - len(per_s))
+    per[h] += 1
+    per_s[h] += d
+
+
+class LabelEventTracker:
+    """Incremental ``detect_label_events``: constant memory (open segment, last event, running totals, a capped list of event
+    starts, per-hour counts). ``view()`` equals the batch result (and ``summarize_events``) on the frames pushed so far; ``count`` only grows."""
+
+    def __init__(self, p: LabelEvents = PARAMS.audio.cough, fr_s: Optional[float] = None, max_ticks: int = 500):
+        self.p = p
+        self.fr_s = frame_s() if fr_s is None else fr_s
+        self.max_ticks = max_ticks
+        self.reset()
+
+    def reset(self) -> None:
+        self._cur: Optional[list] = None      # [t_start, t_end, peak, n_frames]
+        self._last: Optional[list] = None     # last event [t_start, t_end, peak] (may still be extended by a merge)
+        self._count = 0
+        self._done_s = 0.0                    # duration of the events before ``_last``
+        self._hours: list[int] = []           # per-hour counts of the events before ``_last``
+        self._hours_s: list[float] = []       # per-hour seconds of the events before ``_last``
+        self._starts: deque = deque(maxlen=self.max_ticks)
+
+    def _absorb(self, seg, last, count):
+        p = self.p
+        if seg[3] < p.min_frames:
+            return last, count, False
+        if last is not None and (seg[0] - last[1] < p.merge_gap_s - 1e-9 or seg[0] - last[0] < p.refractory_s - 1e-9):
+            return [last[0], seg[1], max(last[2], seg[2])], count, False
+        return [seg[0], seg[1], seg[2]], count + 1, True
+
+    def _hour(self, t_start: float) -> int:
+        return min(MAX_HOURS - 1, max(0, int(math.floor(t_start / 3600.0))))
+
+    def push(self, t: float, s: float) -> None:
+        p = self.p
+        if self._cur is None:
+            if s >= p.on_thr:
+                self._cur = [t, t, s, 1]
+            return
+        if s >= p.off_thr:
+            self._cur[1] = t
+            self._cur[2] = max(self._cur[2], s)
+            self._cur[3] += 1
+            return
+        prev = self._last
+        last, count, added = self._absorb(self._cur, self._last, self._count)
+        if added and prev is not None:   # the previous last event can no longer change
+            d = prev[1] - prev[0] + self.fr_s
+            self._done_s += d
+            _bump(self._hours, self._hours_s, self._hour(prev[0]), d)
+        self._last, self._count, self._cur = last, count, None
+        if added:
+            self._starts.append(last[0])
+
+    def view(self) -> dict:
+        """``{count, last, ticks, total_s, per_hour, per_hour_s}`` as the batch detector would report them for the frames so far (an open segment counts)."""
+        last, count = self._last, self._count
+        prev = self._last
+        ticks = list(self._starts)
+        done_s, hours, hours_s = self._done_s, list(self._hours), list(self._hours_s)
+        if self._cur is not None:
+            last, count, added = self._absorb(self._cur, last, count)
+            if added:
+                ticks.append(last[0])
+                if prev is not None:
+                    d = prev[1] - prev[0] + self.fr_s
+                    done_s += d
+                    _bump(hours, hours_s, self._hour(prev[0]), d)
+        total = done_s
+        if last is not None:
+            d = last[1] - last[0] + self.fr_s
+            total += d
+            _bump(hours, hours_s, self._hour(last[0]), d)
+        return {"count": count,
+                "last": None if last is None else {"t_start": last[0], "t_end": last[1], "peak_score": last[2]},
+                "ticks": ticks, "total_s": total, "per_hour": hours, "per_hour_s": hours_s}
+
+
+def label_sections(p=PARAMS) -> dict:
+    """Label -> detector parameters: Cough (W4) plus the W10 labels of ``audio_events``."""
+    return {"Cough": p.audio.cough, **{s.label: s for s in p.audio_events.sections()}}
+
+
 def run_label_events(inp: dict) -> dict:
-    """Fixture runner: ``{label, frames: [[t, score], ...]}`` with the parameters of that label's section."""
-    sections = {"Cough": PARAMS.audio.cough}
-    return detect_label_events(inp["frames"], sections[inp["label"]])
+    """Fixture runner: ``{label, frames: [[t, score], ...]}`` with the parameters of that label's section.
+    Output: the events plus ``count``, ``total_s`` (total event time), ``per_hour`` (counts per session hour) and ``per_hour_s``."""
+    res = detect_label_events(inp["frames"], label_sections()[inp["label"]])
+    sm = summarize_events(res["events"])
+    return {**res, "total_s": sm["total_s"], "per_hour": sm["per_hour"], "per_hour_s": sm["per_hour_s"]}
 
 
 # ------------------------------------------------------------------ audio-level fixture runner

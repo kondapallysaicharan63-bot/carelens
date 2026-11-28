@@ -145,6 +145,36 @@ export function writeBreathWav(name = 'breath-15bpm.wav', bpm = 15, seconds = 60
   return path;
 }
 
+/**
+ * Breath-like noise at `bpm` with a silent stretch: breaths start every 60 / bpm s; those starting before `regularS` or from
+ * `regularS + gapS` on are sounded, the ones in between are not (a gap of `gapS` to `gapS + one breath` between the last sounded breath
+ * and the next). Same breath shape as writeBreathWav. Synthetic signal only. Length `regularS + gapS + tailS` seconds.
+ */
+export function writeBreathPauseWav(name = 'breath-pause.wav', bpm = 14, regularS = 66, gapS = 15, tailS = 30, fs = 48000): string {
+  const path = join(TMP, name);
+  const seconds = regularS + gapS + tailS;
+  const n = Math.round(seconds * fs), T = 60 / bpm, r = rng(77);
+  const pcm = Buffer.alloc(44 + n * 2);
+  const bump = (x: number): number => (x > 0 && x < 1 ? 0.5 - 0.5 * Math.cos(2 * Math.PI * x) : 0);
+  let lp1 = 0, lp2 = 0, hp = 0, prev = 0;
+  const aLo = 1 - Math.exp(-2 * Math.PI * 1800 / fs), aHi = Math.exp(-2 * Math.PI * 250 / fs);
+  for (let i = 0; i < n; i++) {
+    const t = i / fs, k = Math.floor(t / T), ph = t - k * T;
+    const sounded = k * T < regularS || k * T >= regularS + gapS;
+    const gain = 0.004 + (sounded ? 0.12 * bump((ph - 0.2) / 1.2) + 0.40 * bump((ph - 1.6) / 1.8) : 0);
+    const w = normal(r);
+    lp1 += aLo * (w - lp1); lp2 += aLo * (lp1 - lp2);
+    hp = aHi * (hp + lp2 - prev); prev = lp2;
+    const v = Math.max(-0.95, Math.min(0.95, hp * 2.2 * gain * 3));
+    pcm.writeInt16LE(Math.round(v * 32767), 44 + 2 * i);
+  }
+  pcm.write('RIFF', 0); pcm.writeUInt32LE(36 + n * 2, 4); pcm.write('WAVEfmt ', 8); pcm.writeUInt32LE(16, 16); pcm.writeUInt16LE(1, 20);
+  pcm.writeUInt16LE(1, 22); pcm.writeUInt32LE(fs, 24); pcm.writeUInt32LE(fs * 2, 28); pcm.writeUInt16LE(2, 32); pcm.writeUInt16LE(16, 34);
+  pcm.write('data', 36); pcm.writeUInt32LE(n * 2, 40);
+  writeFileSync(path, pcm);
+  return path;
+}
+
 /** A shared/fixtures landmark fixture expanded to 33 rows per frame (unlisted landmarks: invisible), as the pose provider returns them. */
 export function fixtureLandmarks(name: string): { fps: number; landmarks: (number[][] | null)[] } {
   const d = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'fixtures', `${name}.json`), 'utf8'));

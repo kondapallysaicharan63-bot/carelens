@@ -42,5 +42,7 @@ export const TIER2: [string, string][] = [
   ['Hand movement', 'Experimental; a rhythmic hand movement trend.'],
   [BLINK_TITLE, 'Experimental. Needs the camera.'],
   ['Activity', 'Experimental. Time active, still and away.'],
-  ['Snoring', 'Experimental.'],
+  ['Snoring sounds', 'Experimental. Needs the microphone.'],
+  ['Possible pauses in breathing sounds', 'Experimental. Needs the microphone, near the bed.'],
+  ['Talking time (wellbeing trend)', 'Experimental. Needs the microphone.'],
 ];

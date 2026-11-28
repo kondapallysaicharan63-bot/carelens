@@ -2,12 +2,14 @@
 // carelens/websession.py implements the same checks. Wellbeing trends only. Not a medical device.
 export const SCHEMA_VERSION = 1; // JSON 1 and 1.0 are the same number; booleans are not numbers (Number.isInteger(true) is false)
 export const METRICS = ['hr_fingertip', 'hr_face', 'br_camera', 'br_sound'] as const;
-export const SUMMARY_KINDS = ['hrv', 'chair_stand_30s', 'sit_to_stand_5x', 'tug', 'walking_speed', 'hand_tremor', 'blink', 'activity'] as const;
+export const SUMMARY_KINDS = ['hrv', 'chair_stand_30s', 'sit_to_stand_5x', 'tug', 'walking_speed', 'hand_tremor', 'blink', 'activity', 'snoring', 'pauses', 'talking'] as const;
 export const PHASE_KEYS = ['rise', 'walk_out', 'turn_1', 'walk_back', 'turn_2', 'sit'] as const;
 export const MAX_REP_TIMES = 100;
+export const MAX_PER_HOUR = 72;
+export const MAX_DURATIONS = 500;
 /** reported rows must carry this headline number (kind -> required fields) */
-const SUM_HEADLINE: Record<(typeof SUMMARY_KINDS)[number], readonly string[]> = { hrv: ['rmssd_ms', 'sdnn_ms'], chair_stand_30s: ['reps'], sit_to_stand_5x: ['time_s'], tug: ['time_s'], walking_speed: ['speed_m_s'], hand_tremor: ['freq_hz', 'amp_pct'], blink: ['blinks_per_min', 'eyes_closed_pct'], activity: ['active_min', 'still_min', 'absent_min'] };
-export const EVENT_KINDS = ['possible_fall', 'inactivity', 'cough'] as const;
+const SUM_HEADLINE: Record<(typeof SUMMARY_KINDS)[number], readonly string[]> = { hrv: ['rmssd_ms', 'sdnn_ms'], chair_stand_30s: ['reps'], sit_to_stand_5x: ['time_s'], tug: ['time_s'], walking_speed: ['speed_m_s'], hand_tremor: ['freq_hz', 'amp_pct'], blink: ['blinks_per_min', 'eyes_closed_pct'], activity: ['active_min', 'still_min', 'absent_min'], snoring: ['count', 'minutes'], pauses: ['count', 'regular_min'], talking: ['minutes'] };
+export const EVENT_KINDS = ['possible_fall', 'inactivity', 'cough', 'distress_sound', 'possible_pause'] as const;
 export const MODES = ['camera', 'microphone', 'fingertip'] as const;
 export const UA_FAMILIES = ['Chrome', 'Edge', 'Firefox', 'Safari', 'Other'] as const;
 export type Metric = (typeof METRICS)[number];
@@ -19,7 +21,7 @@ export interface EstimateRow {
   t: number; wall: string; metric: Metric; value: number | null; quality: number; reported: boolean; reason: string; span_s?: number;
 }
 export interface EventRow {
-  t: number; wall: string; kind: EventKind; t_onset?: number; t_end?: number; peak_score?: number; trigger?: string;
+  t: number; wall: string; kind: EventKind; t_onset?: number; t_end?: number; peak_score?: number; trigger?: string; sound_cue?: boolean; merged_into_fall?: boolean;
 }
 /** Whole-measurement result (W6 HRV, W7 mobility tests). `summaries` is an optional top-level array: absent in older exports. */
 export interface SummaryRow {
@@ -28,6 +30,7 @@ export interface SummaryRow {
   reps?: number; time_s?: number; speed_m_s?: number; cadence_spm?: number; quality?: number; rep_times_s?: number[]; phases_s?: Partial<Record<(typeof PHASE_KEYS)[number], number>>;
   freq_hz?: number; amp_pct?: number; p2p_pct?: number;
   blinks_per_min?: number; eyes_closed_pct?: number; long_closures?: number; active_min?: number; still_min?: number; absent_min?: number; longest_still_min?: number;
+  count?: number; minutes?: number; per_hour?: number[]; rate_per_h?: number; regular_min?: number; durations_s?: number[];
 }
 export interface SessionExport {
   schema_version: number; app_version: string; params_version: number; started_at: string; tz_offset_min: number;
@@ -89,7 +92,7 @@ function summaryErrors(e: unknown, w: string, errs: string[]): void {
   if (!isObj(e)) { errs.push(`${w}: must be an object`); return; }
   const req = ['t', 'wall', 'kind', 'reported', 'reason'];
   for (const k of req) if (!(k in e)) errs.push(`${w}: missing "${k}"`);
-  noExtra(e, [...req, 'rmssd_ms', 'sdnn_ms', 'mean_hr_bpm', 'n_beats', 'n_kept', 'kept_frac', 'duration_s', 'reps', 'time_s', 'speed_m_s', 'cadence_spm', 'quality', 'rep_times_s', 'phases_s', 'freq_hz', 'amp_pct', 'p2p_pct', 'blinks_per_min', 'eyes_closed_pct', 'long_closures', 'active_min', 'still_min', 'absent_min', 'longest_still_min'], w, errs);
+  noExtra(e, [...req, 'rmssd_ms', 'sdnn_ms', 'mean_hr_bpm', 'n_beats', 'n_kept', 'kept_frac', 'duration_s', 'reps', 'time_s', 'speed_m_s', 'cadence_spm', 'quality', 'rep_times_s', 'phases_s', 'freq_hz', 'amp_pct', 'p2p_pct', 'blinks_per_min', 'eyes_closed_pct', 'long_closures', 'active_min', 'still_min', 'absent_min', 'longest_still_min', 'count', 'minutes', 'per_hour', 'rate_per_h', 'regular_min', 'durations_s'], w, errs);
   if ('t' in e && !(isNum(e.t) && e.t >= 0)) errs.push(`${w}.t: expected a number >= 0`);
   if ('wall' in e && !isoOk(e.wall)) errs.push(`${w}.wall: expected ISO 8601 with a UTC offset`);
   if ('kind' in e && !oneOf(SUMMARY_KINDS, e.kind)) errs.push(`${w}.kind: expected one of ${SUMMARY_KINDS.join('|')}`);
@@ -112,6 +115,11 @@ function summaryErrors(e: unknown, w: string, errs: string[]): void {
   for (const k of ['blinks_per_min', 'active_min', 'still_min', 'absent_min', 'longest_still_min'] as const) if (k in e && !(isNum(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected a number >= 0`);
   if ('eyes_closed_pct' in e && !(isNum(e.eyes_closed_pct) && e.eyes_closed_pct >= 0 && e.eyes_closed_pct <= 100)) errs.push(`${w}.eyes_closed_pct: expected a number in [0, 100]`);
   if ('long_closures' in e && !(Number.isInteger(e.long_closures) && (e.long_closures as number) >= 0)) errs.push(`${w}.long_closures: expected an integer >= 0`);
+  // W10 sound summaries (snoring sounds, possible pauses in breathing sounds, talking time): counts, minutes, per-hour lists
+  if ('count' in e && !(Number.isInteger(e.count) && (e.count as number) >= 0)) errs.push(`${w}.count: expected an integer >= 0`);
+  for (const k of ['minutes', 'rate_per_h', 'regular_min'] as const) if (k in e && !(isNum(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected a number >= 0`);
+  if ('per_hour' in e && !(Array.isArray(e.per_hour) && e.per_hour.length <= MAX_PER_HOUR && e.per_hour.every((v) => isNum(v) && v >= 0))) errs.push(`${w}.per_hour: expected up to ${MAX_PER_HOUR} numbers >= 0`);
+  if ('durations_s' in e && !(Array.isArray(e.durations_s) && e.durations_s.length <= MAX_DURATIONS && e.durations_s.every((v) => isNum(v) && v >= 0))) errs.push(`${w}.durations_s: expected up to ${MAX_DURATIONS} numbers >= 0`);
   if ('phases_s' in e) {
     const ph = e.phases_s;
     if (!isObj(ph)) errs.push(`${w}.phases_s: must be an object`);
@@ -146,11 +154,12 @@ function eventErrors(e: unknown, w: string, errs: string[]): void {
   if (!isObj(e)) { errs.push(`${w}: must be an object`); return; }
   const req = ['t', 'wall', 'kind'];
   for (const k of req) if (!(k in e)) errs.push(`${w}: missing "${k}"`);
-  noExtra(e, [...req, 't_onset', 't_end', 'peak_score', 'trigger'], w, errs);
+  noExtra(e, [...req, 't_onset', 't_end', 'peak_score', 'trigger', 'sound_cue', 'merged_into_fall'], w, errs);
   if ('t' in e && !(isNum(e.t) && e.t >= 0)) errs.push(`${w}.t: expected a number >= 0`);
   if ('wall' in e && !isoOk(e.wall)) errs.push(`${w}.wall: expected ISO 8601 with a UTC offset`);
   if ('kind' in e && !oneOf(EVENT_KINDS, e.kind)) errs.push(`${w}.kind: expected one of ${EVENT_KINDS.join('|')}`);
   for (const k of ['t_onset', 't_end'] as const) if (k in e && !(isNum(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected a number >= 0`);
   if ('peak_score' in e && !(isNum(e.peak_score) && e.peak_score >= 0 && e.peak_score <= 1)) errs.push(`${w}.peak_score: expected a number in [0, 1]`);
   if ('trigger' in e && !(typeof e.trigger === 'string' && e.trigger.length <= 40)) errs.push(`${w}.trigger: expected a string up to 40 characters`);
+  for (const k of ['sound_cue', 'merged_into_fall'] as const) if (k in e && typeof e[k] !== 'boolean') errs.push(`${w}.${k}: expected a boolean`);
 }

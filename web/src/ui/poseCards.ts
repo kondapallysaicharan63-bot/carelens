@@ -6,7 +6,10 @@ import type { PoseEvent } from '../core/events';
 import type { Posture } from '../core/features';
 import { el } from './dom';
 import { seedAndSubscribe } from './controls';
-import { EventLog } from './eventLog';
+import type { EventLog } from './eventLog';
+import { buildCheckinSurface, formatClock, type CheckinSurface } from './checkinSurface';
+
+export { formatClock };
 
 export const BREATHING_HINT = 'Sit still facing the camera with your chest visible';
 export const BREATHING_NOTE = 'Camera breathing estimates are a wellbeing trend only. Clothing, movement and low light make them less reliable.';
@@ -35,12 +38,6 @@ export function breathingGuidance(status: PoseView['breathing']['status'], repor
   }
 }
 
-export function formatClock(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
 export interface PoseCards {
   inView: HTMLElement;
   posture: HTMLElement;
@@ -59,8 +56,8 @@ function head(title: string, id: string): HTMLElement {
   return el('div', { class: 'card-head' }, el('h3', { id }, title), el('span', { class: 'tag' }, 'Tier 1'));
 }
 
-export function buildPoseCards(meter: (q: number | null) => HTMLElement, now: () => number = () => Date.now()): PoseCards {
-  const log = new EventLog();
+export function buildPoseCards(meter: (q: number | null) => HTMLElement, now: () => number = () => Date.now(), surface: CheckinSurface = buildCheckinSurface()): PoseCards {
+  const log = surface.log;
 
   // ---- In view
   const inViewValue = el('p', { class: 'value muted', id: 'inview-value' }, 'In view: —');
@@ -86,34 +83,13 @@ export function buildPoseCards(meter: (q: number | null) => HTMLElement, now: ()
     o.selected = s === params.scheduling.inactivity_demo_default_s;
     sel.append(o);
   }
-  const listEl = el('ol', { class: 'event-list', id: 'event-list' });
-  const empty = el('p', { class: 'note', id: 'event-empty' }, 'No check-in suggestions this session.');
   const checkins = el('article', { class: 'card', 'aria-labelledby': 'h-checkin' }, head('Fall and inactivity check-in', 'h-checkin'),
     el('label', { class: 'field' }, el('span', {}, 'Suggest a check-in after no movement for'), sel),
     el('p', { class: 'note' }, `Demo setting: the same inactivity detector as the full system (default ${params.events.inactivity.seconds / 60} min) with a shorter time so you can try it.`),
-    empty, listEl, el('p', { class: 'note' }, CHECKIN_NOTE));
+    surface.empty, surface.list, el('p', { class: 'note' }, CHECKIN_NOTE));
 
-  // ---- Banner
-  const bannerText = el('p', { class: 'banner-text', id: 'banner-text' });
-  const ackBtn = el('button', { type: 'button', class: 'btn', id: 'banner-ack' }, 'Acknowledge');
-  const banner = el('div', { class: 'banner', id: 'checkin-banner', role: 'alert' }, bannerText, ackBtn);
-  banner.hidden = true;
-
-  const render = (): void => {
-    listEl.replaceChildren(
-      ...[...log.entries].reverse().map((e) => {
-        const btn = el('button', { type: 'button', class: 'btn ghost', 'data-ack': String(e.id) }, e.acknowledged ? 'Acknowledged' : 'Acknowledge');
-        btn.disabled = e.acknowledged;
-        btn.addEventListener('click', () => { if (log.acknowledge(e.id)) render(); });
-        return el('li', { class: e.acknowledged ? 'event done' : 'event' }, el('span', { class: 'event-time' }, formatClock(e.at)), el('span', { class: 'event-text' }, e.text), btn);
-      }),
-    );
-    empty.hidden = log.entries.length > 0;
-    const pend = log.pending;
-    banner.hidden = pend === null;
-    if (pend) bannerText.textContent = `${pend.text}${log.pendingCount > 1 ? ` (${log.pendingCount} waiting)` : ''}`;
-  };
-  ackBtn.addEventListener('click', () => { const p = log.pending; if (p && log.acknowledge(p.id)) render(); });
+  const banner = surface.banner;
+  const render = surface.refresh;
 
   let lastPosture: Posture = 'absent';
   const hooks: PoseCards['hooks'] = {

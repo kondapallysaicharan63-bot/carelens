@@ -54,14 +54,17 @@
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "walking_speed" } }, "required": ["reported", "kind"] }, "then": { "required": ["speed_m_s"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "hand_tremor" } }, "required": ["reported", "kind"] }, "then": { "required": ["freq_hz", "amp_pct"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "blink" } }, "required": ["reported", "kind"] }, "then": { "required": ["blinks_per_min", "eyes_closed_pct"] } },
-        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "activity" } }, "required": ["reported", "kind"] }, "then": { "required": ["active_min", "still_min", "absent_min"] } }
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "activity" } }, "required": ["reported", "kind"] }, "then": { "required": ["active_min", "still_min", "absent_min"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "snoring" } }, "required": ["reported", "kind"] }, "then": { "required": ["count", "minutes"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "pauses" } }, "required": ["reported", "kind"] }, "then": { "required": ["count", "regular_min"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "talking" } }, "required": ["reported", "kind"] }, "then": { "required": ["minutes"] } }
       ],
       "properties": {
         "t": { "type": "number", "minimum": 0, "description": "seconds since started_at when the result was produced" },
         "wall": { "type": "string" },
-        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity"], "description": "hrv (W6), a W7 guided mobility test, the W8 rhythmic-hand-movement test, the W9 blink / eyes-closed summary or the W9 activity summary; wellbeing trends only" },
+        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor", "blink", "activity", "snoring", "pauses", "talking"], "description": "hrv (W6), a W7 guided mobility test, the W8 rhythmic-hand-movement test, the W9 blink / eyes-closed summary, the W9 activity summary, or a W10 sound summary (snoring sounds, possible pauses in breathing sounds, talking time); wellbeing trends only" },
         "reported": { "type": "boolean" },
-        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility); ok | no_hand | too_short | low_fps | moving | no_rhythm (hand_tremor); ok | no_face | low_fps | head_turned | calibrating (blink); ok | too_short (activity)" },
+        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility); ok | no_hand | too_short | low_fps | moving | no_rhythm (hand_tremor); ok | no_face | low_fps | head_turned | calibrating (blink); ok | too_short (activity); ok (snoring, talking); ok | no_regular_breathing (pauses)" },
         "rmssd_ms": { "type": "number", "minimum": 0 },
         "sdnn_ms": { "type": "number", "minimum": 0 },
         "mean_hr_bpm": { "type": "number", "exclusiveMinimum": 0 },
@@ -85,6 +88,12 @@
         "still_min": { "type": "number", "minimum": 0, "description": "activity: minutes in view and still" },
         "absent_min": { "type": "number", "minimum": 0, "description": "activity: minutes with nobody in view" },
         "longest_still_min": { "type": "number", "minimum": 0, "description": "activity: longest uninterrupted still stretch, minutes" },
+        "count": { "type": "integer", "minimum": 0, "description": "snoring: snoring-sound events; pauses: possible pauses in breathing sounds" },
+        "minutes": { "type": "number", "minimum": 0, "description": "snoring / talking: total minutes of snoring sounds / talking time" },
+        "per_hour": { "type": "array", "maxItems": 72, "items": { "type": "number", "minimum": 0 }, "description": "snoring: events per session hour; talking: minutes per session hour" },
+        "rate_per_h": { "type": "number", "minimum": 0, "description": "pauses: possible pauses per hour of regular breathing sounds; absent while under 30 minutes of it" },
+        "regular_min": { "type": "number", "minimum": 0, "description": "pauses: minutes of regular breathing sounds that count towards the rate" },
+        "durations_s": { "type": "array", "maxItems": 500, "items": { "type": "number", "minimum": 0 }, "description": "pauses: duration of each possible pause, seconds" },
         "phases_s": { "type": "object", "additionalProperties": false, "properties": { "rise": { "type": "number", "minimum": 0 }, "walk_out": { "type": "number", "minimum": 0 }, "turn_1": { "type": "number", "minimum": 0 }, "walk_back": { "type": "number", "minimum": 0 }, "turn_2": { "type": "number", "minimum": 0 }, "sit": { "type": "number", "minimum": 0 } }, "description": "tug: phase durations" }
       }
     },
@@ -95,11 +104,13 @@
       "properties": {
         "t": { "type": "number", "minimum": 0, "description": "seconds since started_at when it was raised" },
         "wall": { "type": "string" },
-        "kind": { "enum": ["possible_fall", "inactivity", "cough"] },
+        "kind": { "enum": ["possible_fall", "inactivity", "cough", "distress_sound", "possible_pause"], "description": "possible_fall, inactivity (check-in suggestions), cough, distress_sound (W10: a possible distress sound, label in trigger), possible_pause (W10: a possible pause in breathing sounds, t_onset..t_end)" },
         "t_onset": { "type": "number", "minimum": 0, "description": "possible_fall / inactivity: estimated onset" },
         "t_end": { "type": "number", "minimum": 0, "description": "cough: end of the sound" },
         "peak_score": { "type": "number", "minimum": 0, "maximum": 1, "description": "cough: classifier peak score" },
-        "trigger": { "type": "string", "maxLength": 40 }
+        "trigger": { "type": "string", "maxLength": 40, "description": "possible_fall / inactivity: what triggered it; distress_sound: the sound label" },
+        "merged_into_fall": { "type": "boolean", "description": "distress_sound: this sound corroborated a possible fall and was shown as that fall\u2019s check-in, not as its own (W10)" },
+        "sound_cue": { "type": "boolean", "description": "possible_fall: a thump / scream / glass sound was heard within 10 s (W10)" }
       }
     }
   }

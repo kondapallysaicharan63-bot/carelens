@@ -126,7 +126,9 @@ Each task is: Python reference → fixtures → TS port → parity + unit tests 
 - **W8** hand tremor (3–12 Hz)
 - **W9** blink rate, PERCLOS, activity level
 - **W10** snoring + "possible pause" count, distress sounds as extra fall cues, speech/voice
-  activity time
+  activity time. Built: `carelens/sleep_sounds.py` + `web/src/core/sleepSounds.ts` (pauses in
+  breathing sounds, fall sound cue), per-label YAMNet detectors in `params.audio_events`, night mode
+  (Wake Lock, dimmed, mic-only), session summaries in the export. Experimental; not a sleep test.
 - **W11** optional "help" keyword (Vosk, off by default)
 
 **Not offered, explained in the UI:** SpO₂, blood pressure, glucose, temperature, any disease
