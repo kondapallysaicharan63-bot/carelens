@@ -82,6 +82,7 @@ export class FaceHrSession {
   private prev: Pt | null = null;
   private prevT = 0;
   private active = true;
+  private paused = false;
 
   constructor(private readonly subscribe: Subscribe, private readonly hooks: FaceHooks) {}
 
@@ -101,7 +102,18 @@ export class FaceHrSession {
   setActive(active: boolean): void {
     if (this.active === active) return;
     this.active = active;
-    if (!active) {
+    this.applyRunning();
+  }
+
+  /** Hold the face model while the hand test runs (independent of the user's face-HR switch); the window restarts on resume. */
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    this.applyRunning();
+  }
+
+  private applyRunning(): void {
+    if (!(this.active && !this.paused)) {
       this.core.reset(); this.clock.reset(); this.prev = null;
       this.hooks.onOutline(null, 0, 0);
     }
@@ -138,7 +150,7 @@ export class FaceHrSession {
   }
 
   private processFrame(video: HTMLVideoElement, now: number, meta?: FrameMeta): void {
-    if (this.ended || !this.handle || !PoseScheduler.shouldRunFace(this.active) || video.videoWidth === 0 || video.readyState < 2) return;
+    if (this.ended || !this.handle || !PoseScheduler.shouldRunFace(this.active && !this.paused) || video.videoWidth === 0 || video.readyState < 2) return;
     const t = this.clock.time(now, meta);
     if (t === null) return;
     const lm = this.handle.detect(video, now);

@@ -14,6 +14,9 @@ export interface SpectralParams extends PeakParams {
   taper_stop_lo_hz: number; taper_stop_hi_hz: number;
 }
 
+/** What the band-pass gain needs (the peak-picker fields are not used by taper/bandpass). */
+export type BandParams = Pick<SpectralParams, 'band_lo_hz' | 'band_hi_hz' | 'taper_stop_lo_hz' | 'taper_stop_hi_hz'>;
+
 export const EPS = 1e-30;
 
 // ------------------------------------------------------------------ FFT (iterative radix-2, no deps)
@@ -209,7 +212,7 @@ export function spectralSnr(power: Float64Array, nFft: number, fs: number, fStar
 }
 
 /** Raised-cosine band-pass gain at frequency f (Hz). */
-export function taper(f: number, p: SpectralParams): number {
+export function taper(f: number, p: BandParams): number {
   if (f >= p.taper_stop_lo_hz && f < p.band_lo_hz) {
     return 0.5 - 0.5 * Math.cos((Math.PI * (f - p.taper_stop_lo_hz)) / (p.band_lo_hz - p.taper_stop_lo_hz));
   }
@@ -221,7 +224,7 @@ export function taper(f: number, p: SpectralParams): number {
 }
 
 /** FFT-domain band-pass of the zero-padded signal, truncated back to the window length. */
-export function bandpass(rel: number[], nFft: number, fs: number, p: SpectralParams): number[] {
+export function bandpass(rel: number[], nFft: number, fs: number, p: BandParams): number[] {
   const re = new Float64Array(nFft), im = new Float64Array(nFft);
   for (let i = 0; i < rel.length; i++) re[i] = rel[i]!;
   fft(re, im);

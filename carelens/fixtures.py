@@ -32,6 +32,7 @@ from .rppg import run_face_rppg, synth_face_trace
 from .synth import ASPECT, Scenario, Segment
 from . import synth as SY
 from .mobility import MOBILITY_INDICES, run_mobility
+from .tremor import run_tremor, synth_hand
 from .vitals import BreathingRateEstimator, HeartRateEstimator
 from . import audio as AU
 
@@ -169,6 +170,7 @@ RUNNERS: dict[str, Callable[[dict], dict]] = {
     "audio_breath_env": AU.run_breath_env,
     "audio_label_events": AU.run_label_events,
     "mobility": run_mobility,
+    "tremor": run_tremor,
 }
 
 TOL_VITALS = {"value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "reported": "exact",
@@ -185,6 +187,7 @@ TOL_AUDIO_EVENTS = {"event_count": "exact", "t_start": "exact", "t_end": "exact"
 TOL_MOBILITY = {"mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0, "quality": 0.05,
                 "reported": "exact", "reason": "exact", "reps": "exact", "partial_rises": "exact", "stands": "exact",
                 "n_segments": "exact", "n_not_side_on": "exact", "rep_in_progress": "exact"}
+TOL_TREMOR = {"freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "reported": "exact", "reason": "exact", "n_frames": "exact"}
 TOL_EVENTS = {"event_time_s": 0.1, "kind": "exact", "event_count": "exact",
               "torso_angle_deg": 0.05, "motion": 0.01, "posture": "exact"}
 
@@ -402,6 +405,14 @@ def _mobility_fixtures() -> list:
                     "12 reps + 2 partial rises with 4 px-class landmark noise and three 0.3 s pose dropouts bridged by the tracker: "
                     "still 12 reps, quality below 1.", "chair_stand_30s", scr, go_t=1.0,
                     dropouts=[(5.0, 5.3), (13.1, 13.4), (20.5, 20.8)]))
+    scr, _ = SY.chair_stand_script(8, partial_after=(2, 5), cycle=2.9, t0=1.0, duration=32.0, jitter=0.002, seed=706)
+    ts, frames = scr.frames(8.0, ())
+    rng = np.random.default_rng(706)
+    keep = [i for i in range(len(ts)) if i == 0 or rng.random() < 0.85]   # a busy phone: 8 Hz pose with ~15 % of the frames missing
+    inp = {"test": "chair_stand_30s", "fps": 8.0, "aspect": ASPECT, "landmark_indices": MOBILITY_INDICES, "go_t": 1.0,
+           "t": [ts[i] for i in keep], "landmarks": [np.round(frames[i][MOBILITY_INDICES], 3).tolist() for i in keep]}
+    out.append(_fixture("mobility_chair_stand_low_rate", "30 s chair stand sampled at 8 Hz with ~15 % of the frames missing (irregular timing): "
+                        "all 8 full reps still counted, 2 partial rises not.", "mobility", inp, TOL_MOBILITY))
     scr, _ = SY.chair_stand_script(5, cycle=2.4, t0=1.5, duration=16.0, jitter=0.002, seed=705)
     out.append(_mob("mobility_sts_5x", "Five sit-to-stands, rising 0.5 s before Go (Go at 2 s): the clock starts at the rise onset.",
                     "sit_to_stand_5x", scr, go_t=2.0))
@@ -419,6 +430,23 @@ def _mobility_fixtures() -> list:
     out.append(_mob("mobility_walk_toward_camera", "Walks diagonally towards the camera (apparent height grows 2x): not_side_on, no speed.",
                     "walking_speed", SY.approach_script(drift_u=0.6, jitter=0.002, seed=720), height_m=1.65))
     return out
+
+
+def _tremor_fixtures() -> list:
+    def tr(name, desc, **kw):
+        return _fixture(name, desc, "tremor", synth_hand(**kw), TOL_TREMOR)
+    return [
+        tr("tremor_4hz", "Hand held out 15 s at 30 fps: 4 Hz rhythmic movement, 2.5 % of hand size (RMS), landmark jitter 0.4 % of frame, "
+           "slow voluntary drift: ok.", hz=4.0, amp_rms_pct=2.5, jitter=0.004, drift_pct=2.0, seed=801),
+        tr("tremor_9hz", "Same hand with 9 Hz rhythmic movement, 2 % of hand size (RMS): ok.",
+           hz=9.0, amp_rms_pct=2.0, jitter=0.004, drift_pct=2.0, seed=802, angle_deg=75.0),
+        tr("tremor_null", "A steady hand: landmark jitter and slow drift only, no rhythm: no_rhythm (the expected result).",
+           jitter=0.004, drift_pct=2.0, seed=803),
+        tr("tremor_low_fps", "11 Hz rhythmic movement but only 20 frames per s: low_fps, never an aliased frequency.",
+           fps=20.0, hz=11.0, amp_rms_pct=3.0, jitter=0.004, drift_pct=2.0, seed=804),
+        tr("tremor_moving", "Large slow arm movement while 6 Hz rhythm is present: moving, withheld.",
+           hz=6.0, amp_rms_pct=2.5, jitter=0.004, drift_pct=2.0, arm_pct=20.0, seed=805),
+    ]
 
 
 def generate_all() -> dict[str, str]:
@@ -517,7 +545,7 @@ def generate_all() -> dict[str, str]:
         _rppg("rppg_disagree_flicker",
               "70 bpm plus a blue-ish colour flicker at 100 bpm: POS and CHROM disagree, so the reading is withheld.",
               32, 70, 208, "light", noise=0.02, interference=(100.0, 0.006, (0.2, 0.2, 1.0))),
-    ] + _audio_fixtures() + _mobility_fixtures()
+    ] + _audio_fixtures() + _mobility_fixtures() + _tremor_fixtures()
     return {f["name"] + ".json": json.dumps(f, separators=(",", ":"), allow_nan=False) + "\n"
             for f in fx}
 
@@ -532,7 +560,11 @@ _TOL_KEYS = {"value": "value_bpm", "quality": "quality", "t": "t_s", "t_onset": 
 _MOB_TOL_KEYS = {"time_s": "mob_time_s", "rep_times_s": "mob_time_s", "rise": "mob_time_s", "walk_out": "mob_time_s", "turn_1": "mob_time_s",
                  "walk_back": "mob_time_s", "turn_2": "mob_time_s", "sit": "mob_time_s", "t_start": "mob_time_s", "duration_s": "mob_time_s",
                  "speed_m_s": "speed_m_s", "distance_m": "distance_m", "cadence_spm": "cadence_spm", "quality": "quality"}
-_TOL_DEFAULTS = {"hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
+# tremor fixtures only: amplitudes compare RELATIVELY (tolerance = amp_rel * |expected|), frequency in Hz
+_TREMOR_TOL_KEYS = {"freq_hz": "freq_hz", "amp_pct": "amp_rel", "p2p_pct": "amp_rel", "rms_pct": "amp_rel", "motion_pct": "amp_rel",
+                    "prominence": "prominence"}
+_TOL_RELATIVE = {"amp_rel"}
+_TOL_DEFAULTS = {"freq_hz": 0.05, "amp_rel": 0.01, "prominence": 0.01, "hrv_ms": 0.5, "bpm": 0.3, "ibi_ms": 5.0, "snr": 0.05, "pi": 0.01, "value_bpm": 0.5, "quality": 0.05, "t_s": 0.05, "event_time_s": 0.1,
                  "torso_angle_deg": 0.05, "motion": 0.01, "env_log10": 1e-4, "mob_time_s": 0.1, "speed_m_s": 0.02, "distance_m": 0.1, "cadence_spm": 1.0}
 _TOL_OTHER = 1e-4   # numeric fields with no named tolerance (e.g. brightness)
 
@@ -546,20 +578,24 @@ def compare_outputs(fx: dict, actual, expected=None) -> list[str]:
     tol = fx["tolerance"]
     errs: list[str] = []
 
-    def tol_for(field):
-        key = (_MOB_TOL_KEYS if fx.get("input_level") == "mobility" else _TOL_KEYS).get(field)
+    keys = {"mobility": _MOB_TOL_KEYS, "tremor": _TREMOR_TOL_KEYS}.get(fx.get("input_level"), _TOL_KEYS)
+
+    def tol_for(field, e=0.0):
+        key = keys.get(field)
         if key is None:
             return _TOL_OTHER
         v = tol.get(key, _TOL_DEFAULTS[key])
-        return v if isinstance(v, (int, float)) else _TOL_OTHER
+        if not isinstance(v, (int, float)):
+            return _TOL_OTHER
+        return v * abs(e) if key in _TOL_RELATIVE else v
 
     def walk(e, a, path, field):
         if isinstance(e, bool) or isinstance(a, bool) or e is None or isinstance(e, str):
             if e != a or type(e) is not type(a):
                 errs.append(f"{path}: expected {e!r} got {a!r}")
         elif isinstance(e, (int, float)):
-            if not isinstance(a, (int, float)) or not abs(e - a) <= tol_for(field) + 1e-9:
-                errs.append(f"{path}: expected {e} got {a} (tol {tol_for(field)})")
+            if not isinstance(a, (int, float)) or not abs(e - a) <= tol_for(field, e) + 1e-9:
+                errs.append(f"{path}: expected {e} got {a} (tol {tol_for(field, e)})")
         elif isinstance(e, list):
             if not isinstance(a, list) or len(a) != len(e):
                 errs.append(f"{path}: length {len(a) if isinstance(a, list) else a!r} != {len(e)}")

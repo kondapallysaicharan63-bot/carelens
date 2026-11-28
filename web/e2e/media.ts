@@ -166,3 +166,31 @@ export function chairStandScript(): { fps: number; landmarks: (number[][] | null
   const d = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'fixtures', 'mobility_chair_stand_8.json'), 'utf8'));
   return { ...fixtureLandmarks('mobility_chair_stand_8'), holdUntilPlay: true, reps: d.expected.reps as number };
 }
+
+const HAND_TEMPLATE: [number, number][] = [
+  [0, 0], [-0.45, -0.25], [-0.70, -0.55], [-0.95, -0.80], [-1.15, -1.00], [-0.32, -0.98], [-0.38, -1.40], [-0.40, -1.70], [-0.42, -1.95],
+  [0, -1.00], [0, -1.50], [0, -1.85], [0, -2.15], [0.30, -0.95], [0.34, -1.35], [0.36, -1.65], [0.38, -1.90], [0.58, -0.85], [0.65, -1.15], [0.70, -1.35], [0.73, -1.55],
+];
+
+/**
+ * Synthetic held-out hand (21 landmarks per frame, x/y normalised) for the scripted hand model: `hz` rhythmic movement of `ampRmsPct`
+ * (RMS, % of hand size) along a diagonal axis, MediaPipe-like landmark jitter (0.4 % of frame height) and a slow drift. `hz` 0 = a
+ * steady hand. The movement starts at Go (holdUntilPlay) and the script is longer than the 15 s test.
+ */
+export function handScript(hz: number, ampRmsPct = 2.5, seconds = 25, fps = 30, aspect = 4 / 3): { fps: number; landmarks: number[][][]; holdUntilPlay: boolean } {
+  const r = rng(4242 + Math.round(hz * 10));
+  const size = 0.24, jitter = 0.004, ph = 2 * Math.PI * r(), drift = [0.15, 0.4, 0.8].map(() => 2 * Math.PI * r());
+  const n = Math.round(seconds * fps);
+  const landmarks: number[][][] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / fps;
+    const s = hz > 0 ? Math.SQRT2 * (ampRmsPct / 100) * Math.sin(2 * Math.PI * hz * t + ph) : 0;
+    const dx = s * Math.cos(Math.PI / 6) + 0.015 * Math.sin(2 * Math.PI * 0.15 * t + drift[0]!) + 0.01 * Math.sin(2 * Math.PI * 0.4 * t + drift[1]!);
+    const dy = s * Math.sin(Math.PI / 6) + 0.015 * Math.sin(2 * Math.PI * 0.4 * t + drift[2]!);
+    landmarks.push(HAND_TEMPLATE.map(([tx, ty]) => [
+      (0.5 * aspect + size * (tx + dx) + jitter * normal(r)) / aspect,
+      0.75 + size * (ty + dy) + jitter * normal(r),
+    ]));
+  }
+  return { fps, landmarks, holdUntilPlay: true };
+}

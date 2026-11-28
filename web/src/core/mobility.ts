@@ -157,12 +157,17 @@ export class RepMachine {
   private candSit: number | null = null;
   private lastStand = 0;
   private armed = false;
+  private prevT: number | null = null; // time of the previous ok sample
 
   constructor(private readonly mp: MobilityParams) {}
 
   update(s: Sample): void {
     if (!s.ok) return;
     const mp = this.mp, t = s.t;
+    // Dwell rule (mirrors RepMachine in mobility.py): frames further apart than the dwell cannot show a hold, so at low or
+    // irregular pose rates ONE frame of the posture is enough; at normal rates the two-frame check applies.
+    const dt = this.prevT === null ? 0 : t - this.prevT;
+    this.prevT = t;
     const isSit = s.kneeDeg < mp.sit_deg;
     const isStand = s.kneeDeg >= mp.stand_deg && s.hipH >= mp.stand_hip_frac;
     if (this.state === 'init') {
@@ -173,10 +178,11 @@ export class RepMachine {
     }
     if (this.state === 'seated') {
       if (s.kneeDeg > mp.rise_deg) { this.state = 'rising'; this.riseT = t; this.armed = true; this.candStand = this.candSit = null; }
-    } else if (this.state === 'rising') {
+    }
+    if (this.state === 'rising') { // (also on the frame that started the rise: at low rates it may already be standing)
       if (isStand) {
         if (this.candStand === null) this.candStand = t;
-        if (t - this.candStand >= mp.stand_dwell_s) {
+        if (t - this.candStand >= mp.stand_dwell_s - 1e-9 || dt >= mp.stand_dwell_s - 1e-9) {
           this.state = 'standing';
           this.stands.push(this.candStand);
           this.riseOnsets.push(this.riseT);
@@ -187,13 +193,13 @@ export class RepMachine {
       this.candStand = null;
       if (isSit) {
         if (this.candSit === null) this.candSit = t;
-        if (t - this.candSit >= mp.sit_dwell_s) { this.state = 'seated'; this.candSit = null; this.partialRises++; }
+        if (t - this.candSit >= mp.sit_dwell_s - 1e-9 || dt >= mp.sit_dwell_s - 1e-9) { this.state = 'seated'; this.candSit = null; this.partialRises++; }
       } else this.candSit = null;
     } else if (this.state === 'standing') {
       if (isStand) this.lastStand = t;
       if (isSit) {
         if (this.candSit === null) this.candSit = t;
-        if (t - this.candSit >= mp.sit_dwell_s) {
+        if (t - this.candSit >= mp.sit_dwell_s - 1e-9 || dt >= mp.sit_dwell_s - 1e-9) {
           this.state = 'seated';
           if (this.armed) { this.seats.push(this.candSit); this.sitOnsets.push(this.lastStand); }
           this.armed = false; this.candSit = null;

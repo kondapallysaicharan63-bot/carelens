@@ -152,6 +152,8 @@ export interface MovementTests {
   onView(v: PoseView): void;
   /** the camera is off: the card shows why it cannot start */
   disable(text: string): void;
+  /** abandon any test in progress (no result is recorded) and go back to the test list */
+  reset(): void;
 }
 
 type Step = 'pick' | 'safety' | 'placement' | 'countdown' | 'running' | 'result';
@@ -323,6 +325,7 @@ export function buildMovementTests(deps: MovementDeps): MovementTests {
   return {
     root,
     onView,
+    reset() { go('pick'); },
     disable(text) {
       disabled = text;
       disabledNote.textContent = text;

@@ -33,9 +33,8 @@ describe('shared/params.json', () => {
     expect(params.contact_ppg.reserved).toBeUndefined(); // W1: live
     expect(params.rppg.reserved).toBeUndefined(); // W2: live
     expect(params.audio.reserved).toBeUndefined(); // W4: live
-    for (const k of ['breathing_signal', 'tremor']) {
-      expect(params[k].reserved).toBe(true);
-    }
+    expect(params.tremor.reserved).toBeUndefined(); // W8: live
+    expect(params.breathing_signal.reserved).toBe(true);
     expect([params.contact_ppg.band_lo_hz, params.contact_ppg.band_hi_hz]).toEqual([0.7, 3]);
     expect(params.rppg.methods).toEqual(['POS', 'CHROM']);
     expect([params.breathing_signal.band_lo_hz, params.breathing_signal.band_hi_hz]).toEqual([0.1, 0.7]);

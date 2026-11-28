@@ -176,11 +176,17 @@ class RepMachine:
         self._cand_sit: Optional[float] = None
         self._last_stand = 0.0
         self._armed = False
+        self._prev_t: Optional[float] = None   # time of the previous ok sample
 
     def update(self, s: Sample) -> None:
         if not s.ok:
             return
         mp, t = self.mp, s.t
+        # Dwell rule: a posture counts once it was held for the dwell time. Frames further apart than the dwell cannot show a
+        # hold, so at low or irregular pose rates (busy phone, dropped frames) ONE frame of the posture is enough; at
+        # normal rates (frame interval < dwell) the original two-frame check applies.
+        dt = 0.0 if self._prev_t is None else t - self._prev_t
+        self._prev_t = t
         is_sit = s.knee_deg < mp.sit_deg
         is_stand = s.knee_deg >= mp.stand_deg and s.hip_h >= mp.stand_hip_frac
         if self.state == "init":
@@ -192,11 +198,11 @@ class RepMachine:
             if s.knee_deg > mp.rise_deg:
                 self.state, self._rise_t, self._armed = "rising", t, True
                 self._cand_stand = self._cand_sit = None
-        elif self.state == "rising":
+        if self.state == "rising":   # (also on the frame that started the rise: at low rates it may already be standing)
             if is_stand:
                 if self._cand_stand is None:
                     self._cand_stand = t
-                if t - self._cand_stand >= mp.stand_dwell_s:
+                if t - self._cand_stand >= mp.stand_dwell_s - 1e-9 or dt >= mp.stand_dwell_s - 1e-9:
                     self.state = "standing"
                     self.stands.append(self._cand_stand)
                     self.rise_onsets.append(self._rise_t)
@@ -206,7 +212,7 @@ class RepMachine:
             if is_sit:
                 if self._cand_sit is None:
                     self._cand_sit = t
-                if t - self._cand_sit >= mp.sit_dwell_s:
+                if t - self._cand_sit >= mp.sit_dwell_s - 1e-9 or dt >= mp.sit_dwell_s - 1e-9:
                     self.state, self._cand_sit = "seated", None
                     self.partial_rises += 1
             else:
@@ -217,7 +223,7 @@ class RepMachine:
             if is_sit:
                 if self._cand_sit is None:
                     self._cand_sit = t
-                if t - self._cand_sit >= mp.sit_dwell_s:
+                if t - self._cand_sit >= mp.sit_dwell_s - 1e-9 or dt >= mp.sit_dwell_s - 1e-9:
                     self.state = "seated"
                     if self._armed:
                         self.seats.append(self._cand_sit)

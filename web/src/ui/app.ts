@@ -3,6 +3,7 @@ import { describeMediaError, listDevices, nextDeviceId, setTorch, supportsTorch,
 import { onVideoFrame } from '../capture/frames';
 import { PoseSession } from '../capture/poseSession';
 import { createPoseLandmarker } from '../capture/pose';
+import { createHandLandmarker } from '../capture/hand';
 import { VideoChestSource } from '../capture/chestSampler';
 import params from '../../../shared/params.json';
 import { createFaceLandmarker } from '../capture/face';
@@ -26,6 +27,7 @@ import { SessionRecorder } from '../export/recorder';
 import type { Mode as RecMode } from '../export/schema';
 import { BreathCameraLogger } from '../export/breathCamera';
 import { CoughRecorder } from '../export/cough';
+import { buildTremorTest, TREMOR_NOTE, TREMOR_PARAMS, type TremorTest } from './tremorTest';
 import { buildMovementTests, MOVEMENT_PARAMS, MOVEMENT_NOTE, type MovementTests } from './movementTests';
 
 type Theme = 'auto' | 'light' | 'dark';
@@ -41,6 +43,7 @@ export function mountApp(root: HTMLElement): void {
   let audioSession: AudioSession | null = null;
   let audioCards: AudioCards | null = null;
   let movementTests: MovementTests | null = null;
+  let tremorTest: TremorTest | null = null;
   let mode: Mode = 'standard';
   // The user's standard-mode toggles, kept while fingertip mode forces camera-only.
   let stdCamera = consent.state.camera;
@@ -163,7 +166,7 @@ export function mountApp(root: HTMLElement): void {
     );
   }
 
-  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests): HTMLElement {
+  function resultsSections(pose?: PoseCards, face?: FaceCard, audio?: AudioCards | null, movement?: MovementTests, tremor?: TremorTest): HTMLElement {
     const wrap = el('div', {});
     const r = el('section', { class: 'results', 'aria-labelledby': 'h-results' }, el('h2', { id: 'h-results' }, 'Results'), el('p', { class: 'sub' }, 'Tier 1: wellbeing trends with a signal-quality meter.'));
     const grid = el('div', { class: 'grid' });
@@ -183,6 +186,7 @@ export function mountApp(root: HTMLElement): void {
     for (const [t, n] of TIER2) {
       if (t === 'Heart-rate variability') g2.append(makeCard(t, 2, HRV_NOTE, HRV_OFF_TEXT).root);
       else if (t === 'Sit-to-stand and walking speed') g2.append(movement ? movement.root : makeCard('Movement tests', 2, MOVEMENT_NOTE, 'Starts when the camera is on.').root);
+      else if (t === 'Hand movement') g2.append(tremor ? tremor.root : makeCard('Hand movement', 2, TREMOR_NOTE, 'Starts when the camera is on.').root);
       else g2.append(makeCard(t, 2, n).root);
     }
     e.append(g2);
@@ -204,6 +208,8 @@ export function mountApp(root: HTMLElement): void {
     audioCards = null;
     movementTests?.disable('The camera is off, so movement tests cannot run. Start the camera to try one.');
     movementTests = null;
+    tremorTest?.disable('The camera is off, so the hand test cannot run. Start the camera to try it.');
+    tremorTest = null;
     if (recorder) void dataPanel.sessionEnded(recorder);
     stopStream(stream);
     stream = null;
@@ -234,6 +240,17 @@ export function mountApp(root: HTMLElement): void {
     const video = el('video', { playsinline: '', muted: '', autoplay: '', 'aria-label': 'Camera preview' });
     video.muted = true;
     video.playsInline = true;
+    // Hand test (W8): the hand model loads only when the test starts and is closed afterwards. End-to-end builds (vite --mode e2e)
+    // replay scripted hand landmarks instead; the condition is a build-time constant, so that provider is removed from production builds.
+    const tremor = consent.state.camera
+      ? buildTremorTest({
+        onActive: (active) => { if (active) movement?.reset(); poseSession?.setPaused(active); faceSession?.setPaused(active); },
+        getDeclaredFps: () => stream?.getVideoTracks()[0]?.getSettings?.().frameRate ?? null,
+        tp: TREMOR_PARAMS, record: (row) => void rec.addMobilitySummary(row), subscribe: onVideoFrame, getVideo: () => video,
+        loadHand: async () => (import.meta.env.VITE_E2E === '1' ? (await import('../e2e/scriptedHand')).createScriptedHand : createHandLandmarker)(),
+      })
+      : undefined;
+    tremorTest = tremor ?? null;
     const status = el('p', { class: 'status', role: 'status' }, 'Opening devices…');
     const warn = el('p', { class: 'error', role: 'alert' });
     warn.hidden = true;
@@ -286,7 +303,7 @@ export function mountApp(root: HTMLElement): void {
     if (pose) live.append(pose.banner);
     if (consent.state.camera) live.append(el('div', { class: 'preview roi-host' }, video, face!.overlay));
     live.append(controls);
-    main.replaceChildren(live, resultsSections(pose, face, audio, movement), dataPanel.root, notOffered);
+    main.replaceChildren(live, resultsSections(pose, face, audio, movement, tremor), dataPanel.root, notOffered);
 
     let torchOn = false;
     const openWith = async (c: CaptureChoice): Promise<boolean> => {

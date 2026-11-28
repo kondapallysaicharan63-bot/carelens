@@ -2,11 +2,11 @@
 // carelens/websession.py implements the same checks. Wellbeing trends only. Not a medical device.
 export const SCHEMA_VERSION = 1; // JSON 1 and 1.0 are the same number; booleans are not numbers (Number.isInteger(true) is false)
 export const METRICS = ['hr_fingertip', 'hr_face', 'br_camera', 'br_sound'] as const;
-export const SUMMARY_KINDS = ['hrv', 'chair_stand_30s', 'sit_to_stand_5x', 'tug', 'walking_speed'] as const;
+export const SUMMARY_KINDS = ['hrv', 'chair_stand_30s', 'sit_to_stand_5x', 'tug', 'walking_speed', 'hand_tremor'] as const;
 export const PHASE_KEYS = ['rise', 'walk_out', 'turn_1', 'walk_back', 'turn_2', 'sit'] as const;
 export const MAX_REP_TIMES = 100;
 /** reported rows must carry this headline number (kind -> required fields) */
-const SUM_HEADLINE: Record<(typeof SUMMARY_KINDS)[number], readonly string[]> = { hrv: ['rmssd_ms', 'sdnn_ms'], chair_stand_30s: ['reps'], sit_to_stand_5x: ['time_s'], tug: ['time_s'], walking_speed: ['speed_m_s'] };
+const SUM_HEADLINE: Record<(typeof SUMMARY_KINDS)[number], readonly string[]> = { hrv: ['rmssd_ms', 'sdnn_ms'], chair_stand_30s: ['reps'], sit_to_stand_5x: ['time_s'], tug: ['time_s'], walking_speed: ['speed_m_s'], hand_tremor: ['freq_hz', 'amp_pct'] };
 export const EVENT_KINDS = ['possible_fall', 'inactivity', 'cough'] as const;
 export const MODES = ['camera', 'microphone', 'fingertip'] as const;
 export const UA_FAMILIES = ['Chrome', 'Edge', 'Firefox', 'Safari', 'Other'] as const;
@@ -26,6 +26,7 @@ export interface SummaryRow {
   t: number; wall: string; kind: (typeof SUMMARY_KINDS)[number]; reported: boolean; reason: string;
   rmssd_ms?: number; sdnn_ms?: number; mean_hr_bpm?: number; n_beats?: number; n_kept?: number; kept_frac?: number; duration_s?: number;
   reps?: number; time_s?: number; speed_m_s?: number; cadence_spm?: number; quality?: number; rep_times_s?: number[]; phases_s?: Partial<Record<(typeof PHASE_KEYS)[number], number>>;
+  freq_hz?: number; amp_pct?: number; p2p_pct?: number;
 }
 export interface SessionExport {
   schema_version: number; app_version: string; params_version: number; started_at: string; tz_offset_min: number;
@@ -87,7 +88,7 @@ function summaryErrors(e: unknown, w: string, errs: string[]): void {
   if (!isObj(e)) { errs.push(`${w}: must be an object`); return; }
   const req = ['t', 'wall', 'kind', 'reported', 'reason'];
   for (const k of req) if (!(k in e)) errs.push(`${w}: missing "${k}"`);
-  noExtra(e, [...req, 'rmssd_ms', 'sdnn_ms', 'mean_hr_bpm', 'n_beats', 'n_kept', 'kept_frac', 'duration_s', 'reps', 'time_s', 'speed_m_s', 'cadence_spm', 'quality', 'rep_times_s', 'phases_s'], w, errs);
+  noExtra(e, [...req, 'rmssd_ms', 'sdnn_ms', 'mean_hr_bpm', 'n_beats', 'n_kept', 'kept_frac', 'duration_s', 'reps', 'time_s', 'speed_m_s', 'cadence_spm', 'quality', 'rep_times_s', 'phases_s', 'freq_hz', 'amp_pct', 'p2p_pct'], w, errs);
   if ('t' in e && !(isNum(e.t) && e.t >= 0)) errs.push(`${w}.t: expected a number >= 0`);
   if ('wall' in e && !isoOk(e.wall)) errs.push(`${w}.wall: expected ISO 8601 with a UTC offset`);
   if ('kind' in e && !oneOf(SUMMARY_KINDS, e.kind)) errs.push(`${w}.kind: expected one of ${SUMMARY_KINDS.join('|')}`);
@@ -103,6 +104,9 @@ function summaryErrors(e: unknown, w: string, errs: string[]): void {
   if ('cadence_spm' in e && !(isNum(e.cadence_spm) && e.cadence_spm > 0)) errs.push(`${w}.cadence_spm: expected a number > 0`);
   if ('quality' in e && !(isNum(e.quality) && e.quality >= 0 && e.quality <= 1)) errs.push(`${w}.quality: expected a number in [0, 1]`);
   if ('rep_times_s' in e && !(Array.isArray(e.rep_times_s) && e.rep_times_s.length <= MAX_REP_TIMES && e.rep_times_s.every((v) => isNum(v) && v >= 0))) errs.push(`${w}.rep_times_s: expected up to ${MAX_REP_TIMES} numbers >= 0`);
+  // W8 rhythmic hand movement (wellbeing trend): frequency in Hz, amplitude as % of hand size
+  if ('freq_hz' in e && !(isNum(e.freq_hz) && e.freq_hz > 0)) errs.push(`${w}.freq_hz: expected a number > 0`);
+  for (const k of ['amp_pct', 'p2p_pct'] as const) if (k in e && !(isNum(e[k]) && (e[k] as number) >= 0)) errs.push(`${w}.${k}: expected a number >= 0`);
   if ('phases_s' in e) {
     const ph = e.phases_s;
     if (!isObj(ph)) errs.push(`${w}.phases_s: must be an object`);

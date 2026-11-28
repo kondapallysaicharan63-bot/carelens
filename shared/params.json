@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "description": "Single source of every tunable number used by the CareLens core (Python reference + TypeScript port). Not a medical device.",
   "units": {
     "_s": "seconds",
@@ -213,9 +213,23 @@
     "band_hi_hz": 0.7
   },
   "tremor": {
-    "reserved": true,
     "band_lo_hz": 3.0,
-    "band_hi_hz": 12.0
+    "band_hi_hz": 12.0,
+    "taper_stop_lo_hz": 2.0,
+    "taper_stop_hi_hz": 13.5,
+    "fs_hz": 30.0,
+    "test_s": 15.0,
+    "min_window_s": 10.0,
+    "min_rate_hz": 25.0,
+    "max_gap_s": 0.5,
+    "min_hand_score": 0.5,
+    "zero_pad_factor": 4,
+    "edge_trim_s": 0.5,
+    "prom_halfwidth_hz": 0.5,
+    "motion_band_hi_hz": 1.5,
+    "moving_max_pct": 8.0,
+    "min_prominence": 0.3,
+    "noise_floor_pct": 1.0
   },
   "mobility": {
     "min_visibility": 0.5,

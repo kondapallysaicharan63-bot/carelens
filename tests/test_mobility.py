@@ -230,3 +230,31 @@ def test_tug_stand_wobble_sit_then_walk():
 def test_sts_reps_bounded():
     d = PARAMS.mobility.model_dump()
     assert mobility_errors({**d, "sts_reps": 51}) and mobility_errors({**d, "sts_reps": 50}) == []
+
+
+# ---------------------------------------------------------------- low / irregular pose rates (busy phone)
+
+@pytest.mark.parametrize("n,cycle,jit,seed", [(8, 2.9, 0.0008, 701), (12, 2.1, 0.002, 702), (15, 1.7, 0.002, 703)])
+@pytest.mark.parametrize("fps", [10.0, 8.0, 6.0, 5.0, 4.0])
+def test_chair_stand_counts_every_rep_at_low_regular_pose_rates(n, cycle, jit, seed, fps):
+    """Root cause of a flaky e2e (7 of 8 reps): the stand/sit dwell needed two frames >= 0.1 s apart inside the posture and the
+    rise frame itself was never checked for 'already standing', so at low rates a rep seen in one frame was lost."""
+    scr, _ = synth.chair_stand_script(n, partial_after=(2, 5), cycle=cycle, t0=1.0, duration=32.0, jitter=jit, seed=seed)
+    assert M.chair_stand_30s(samples(scr, fps=fps), 1.0)["reps"] == n
+
+
+@pytest.mark.parametrize("fps", [15.0, 10.0])
+def test_chair_stand_survives_irregular_frame_timing(fps):
+    scr, _ = synth.chair_stand_script(12, partial_after=(2, 5), cycle=2.1, t0=1.0, duration=32.0, jitter=0.002, seed=702)
+    ts, fr = scr.frames(fps, ())
+    for seed in range(4):
+        rng = np.random.default_rng(seed)
+        keep = [i for i in range(len(ts)) if rng.random() < 0.85 or i == 0]   # ~15 % of frames never arrive
+        ss = M.track_samples([ts[i] + float(rng.uniform(-0.01, 0.01)) * (i > 0) for i in keep], [fr[i] for i in keep], synth.ASPECT)
+        assert M.chair_stand_30s(ss, 1.0)["reps"] >= 11
+
+
+def test_partial_rise_still_not_counted_at_low_rate():
+    scr, _ = synth.chair_stand_script(8, partial_after=(2, 5), cycle=2.9, t0=1.0, duration=32.0, jitter=0.0008, seed=701)
+    r = M.chair_stand_30s(samples(scr, fps=5.0), 1.0)
+    assert r["reps"] == 8 and r["partial_rises"] >= 1

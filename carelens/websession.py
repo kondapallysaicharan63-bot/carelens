@@ -27,16 +27,16 @@ _OPTIONAL_TOP = ("truncated", "summaries")
 _EST_REQ = ("t", "wall", "metric", "value", "quality", "reported", "reason")
 _EV_REQ = ("t", "wall", "kind")
 _EV_ALL = _EV_REQ + ("t_onset", "t_end", "peak_score", "trigger")
-SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed")
-MOBILITY_KINDS = SUMMARY_KINDS[1:]
+SUMMARY_KINDS = ("hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor")
+MOBILITY_KINDS = SUMMARY_KINDS[1:5]
 PHASE_KEYS = ("rise", "walk_out", "turn_1", "walk_back", "turn_2", "sit")
 MAX_REP_TIMES = 100
 # reported rows must carry this headline number (kind -> required fields)
 _SUM_HEADLINE = {"hrv": ("rmssd_ms", "sdnn_ms"), "chair_stand_30s": ("reps",), "sit_to_stand_5x": ("time_s",), "tug": ("time_s",),
-                 "walking_speed": ("speed_m_s",)}
+                 "walking_speed": ("speed_m_s",), "hand_tremor": ("freq_hz", "amp_pct")}
 _SUM_REQ = ("t", "wall", "kind", "reported", "reason")
 _SUM_ALL = _SUM_REQ + ("rmssd_ms", "sdnn_ms", "mean_hr_bpm", "n_beats", "n_kept", "kept_frac", "duration_s",
-                      "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s")
+                      "reps", "time_s", "speed_m_s", "cadence_spm", "quality", "rep_times_s", "phases_s", "freq_hz", "amp_pct", "p2p_pct")
 
 
 class SessionError(ValueError):
@@ -213,6 +213,12 @@ def _summary_errors(e, w: str, errs: list) -> None:
         r = e["rep_times_s"]
         if not (isinstance(r, list) and len(r) <= MAX_REP_TIMES and all(_num(v) and v >= 0 for v in r)):
             errs.append(f"{w}.rep_times_s: expected up to {MAX_REP_TIMES} numbers >= 0")
+    # W8 rhythmic hand movement (wellbeing trend): frequency in Hz, amplitude as % of hand size
+    if "freq_hz" in e and not (_num(e["freq_hz"]) and e["freq_hz"] > 0):
+        errs.append(f"{w}.freq_hz: expected a number > 0")
+    for k in ("amp_pct", "p2p_pct"):
+        if k in e and not (_num(e[k]) and e[k] >= 0):
+            errs.append(f"{w}.{k}: expected a number >= 0")
     if "phases_s" in e:
         ph = e["phases_s"]
         if not isinstance(ph, dict):

@@ -8,6 +8,7 @@ import { runHrv } from './hrv';
 import { runFaceRppg } from './rppg';
 import { runPoseFixture } from './pipeline';
 import { runMobilityFixture } from './mobility';
+import { runTremorFixture } from './tremor';
 import { BreathingRateEstimator } from './breathing';
 import { runAudioEnvelope, runBreathEnv, runLabelEvents } from './audio';
 
@@ -36,6 +37,8 @@ const breathEnv: Implementation = (fx, params) => runBreathEnv(fx.input, params.
 const labelEvents: Implementation = (fx, params) => runLabelEvents(fx.input, params.audio);
 
 const mobility: Implementation = (fx, params) => runMobilityFixture(fx.input, params);
+
+const tremor: Implementation = (fx, params) => runTremorFixture(fx.input, params);
 
 const landmarks: Implementation = (fx, params) => runPoseFixture(fx.input, params, false);
 
@@ -102,6 +105,7 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   mobility_chair_stand_12: mobility,
   mobility_chair_stand_15: mobility,
   mobility_chair_stand_dropouts: mobility,
+  mobility_chair_stand_low_rate: mobility,
   mobility_sts_5x: mobility,
   mobility_tug: mobility,
   mobility_tug_no_turn: mobility,
@@ -110,6 +114,11 @@ export const IMPLEMENTATIONS: Record<string, Implementation> = {
   mobility_walk_1p4: mobility,
   mobility_walk_crossing_3s: mobility,
   mobility_walk_toward_camera: mobility,
+  tremor_4hz: tremor,
+  tremor_9hz: tremor,
+  tremor_null: tremor,
+  tremor_low_fps: tremor,
+  tremor_moving: tremor,
 };
 
 const TOL_KEYS: Record<string, [string, number]> = {
@@ -123,22 +132,30 @@ const MOB_TOL_KEYS: Record<string, [string, number]> = {
   quality: ['quality', 0.05], time_s: ['mob_time_s', 0.1], rep_times_s: ['mob_time_s', 0.1], rise: ['mob_time_s', 0.1], walk_out: ['mob_time_s', 0.1], turn_1: ['mob_time_s', 0.1], walk_back: ['mob_time_s', 0.1], turn_2: ['mob_time_s', 0.1], sit: ['mob_time_s', 0.1], t_start: ['mob_time_s', 0.1], duration_s: ['mob_time_s', 0.1],
   speed_m_s: ['speed_m_s', 0.02], distance_m: ['distance_m', 0.1], cadence_spm: ['cadence_spm', 1],
 };
+/** tremor fixtures only: frequency in Hz; amplitudes compare RELATIVELY (tolerance = amp_rel * |expected|) */
+const TREMOR_TOL_KEYS: Record<string, [string, number]> = {
+  freq_hz: ['freq_hz', 0.05], amp_pct: ['amp_rel', 0.01], p2p_pct: ['amp_rel', 0.01], rms_pct: ['amp_rel', 0.01], motion_pct: ['amp_rel', 0.01],
+  prominence: ['prominence', 0.01],
+};
+const TOL_RELATIVE = new Set(['amp_rel']);
 const TOL_OTHER = 1e-4; // numeric fields without a named tolerance
 
 /** Same semantics as carelens.fixtures.compare_outputs: numbers within tolerance by field name;
  *  strings/booleans/null (reported, kind, posture, ...), array lengths and key sets exactly. */
 export function compareOutputs(fx: Fixture, actual: any, expected: any = fx.expected): string[] {
   const errs: string[] = [];
-  const tolFor = (field: string): number => {
-    const e = (fx.input_level === 'mobility' ? MOB_TOL_KEYS : TOL_KEYS)[field];
+  const keys = fx.input_level === 'mobility' ? MOB_TOL_KEYS : fx.input_level === 'tremor' ? TREMOR_TOL_KEYS : TOL_KEYS;
+  const tolFor = (field: string, expectedValue = 0): number => {
+    const e = keys[field];
     if (!e) return TOL_OTHER;
     const v = fx.tolerance[e[0]];
-    return typeof v === 'number' ? v : e[1];
+    const t = typeof v === 'number' ? v : e[1];
+    return TOL_RELATIVE.has(e[0]) ? t * Math.abs(expectedValue) : t;
   };
   const walk = (e: any, a: any, path: string, field: string): void => {
     if (typeof e === 'number') {
-      if (typeof a !== 'number' || !(Math.abs(e - a) <= tolFor(field) + 1e-9)) {
-        errs.push(`${path}: expected ${e} got ${a} (tol ${tolFor(field)})`);
+      if (typeof a !== 'number' || !(Math.abs(e - a) <= tolFor(field, e) + 1e-9)) {
+        errs.push(`${path}: expected ${e} got ${a} (tol ${tolFor(field, e)})`);
       }
     } else if (Array.isArray(e)) {
       if (!Array.isArray(a) || a.length !== e.length) {

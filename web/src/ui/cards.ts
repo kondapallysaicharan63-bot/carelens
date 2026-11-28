@@ -38,7 +38,7 @@ export const TIER1: [string, string][] = [
 export const TIER2: [string, string][] = [
   ['Heart-rate variability', 'Fingertip only. Experimental.'],
   ['Sit-to-stand and walking speed', 'Experimental movement trends.'],
-  ['Hand tremor', 'Experimental; not a screening test.'],
+  ['Hand movement', 'Experimental; a rhythmic hand movement trend.'],
   ['Blink rate and eye closure', 'Experimental.'],
   ['Snoring', 'Experimental.'],
 ];

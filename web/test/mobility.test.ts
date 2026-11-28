@@ -40,6 +40,16 @@ describe('chair stand', () => {
     expect(r.rep_times_s).toHaveLength(n);
   });
 
+  it.each([[2, 7.5], [3, 5]])('counts every rep when the pose rate drops (every %ith frame, %f Hz) or timing is irregular', (step, _hz) => {
+    const inp = fx('mobility_chair_stand_8').input;
+    const sub = (keep: (i: number) => boolean) => {
+      const idx = inp.landmarks.map((_: unknown, i: number) => i).filter(keep);
+      return { ...inp, t: idx.map((i: number) => i / inp.fps), landmarks: idx.map((i: number) => inp.landmarks[i]) };
+    };
+    expect(run(sub((i) => i % step === 0)).reps).toBe(8);
+    expect(run(sub((i) => i === 0 || (i % step === 0) !== (i % 7 === 3))).reps).toBeGreaterThanOrEqual(7); // irregular: some frames missing, some extra
+  });
+
   it('withholds when no frames fall in the window', () => {
     const inp = fx('mobility_chair_stand_8').input;
     expect(run({ ...inp, go_t: 500 })).toMatchObject({ reported: false, reason: 'out_of_view', reps: null });

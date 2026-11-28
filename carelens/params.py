@@ -539,6 +539,58 @@ class Mobility(_M):
         return self
 
 
+def tremor_errors(p: dict) -> List[str]:
+    """Consistency checks for ``tremor`` (mirrored by tremorErrors in web/src/core/tremor.ts)."""
+    e: List[str] = []
+    if not 0 < p["taper_stop_lo_hz"] < p["band_lo_hz"] < p["band_hi_hz"] < p["taper_stop_hi_hz"] < p["fs_hz"] / 2:
+        e.append("need 0 < taper_stop_lo < band_lo < band_hi < taper_stop_hi < Nyquist")
+    if not 0 < p["motion_band_hi_hz"] < p["taper_stop_lo_hz"]:
+        e.append("need 0 < motion_band_hi_hz < taper_stop_lo_hz")
+    if not 2.0 * p["band_hi_hz"] < p["min_rate_hz"] <= p["fs_hz"]:
+        e.append("need 2 * band_hi_hz < min_rate_hz <= fs_hz (never report an aliased frequency)")
+    if not 0 < p["min_window_s"] <= p["test_s"]:
+        e.append("need 0 < min_window_s <= test_s")
+    if not 0 <= p["edge_trim_s"] < p["min_window_s"] / 4:
+        e.append("edge_trim_s must be in [0, min_window_s / 4)")
+    for k in ("max_gap_s", "prom_halfwidth_hz", "moving_max_pct", "noise_floor_pct"):
+        if not p[k] > 0:
+            e.append(f"{k} must be > 0")
+    for k in ("min_hand_score", "min_prominence"):
+        if not 0 < p[k] <= 1:
+            e.append(f"{k} must be in (0, 1]")
+    if p["zero_pad_factor"] < 1:
+        e.append("zero_pad_factor must be >= 1")
+    return e
+
+
+class Tremor(_M):
+    """Rhythmic hand movement (3-12 Hz) from hand landmarks (W8, Experimental). Wellbeing trend only."""
+    band_lo_hz: float
+    band_hi_hz: float
+    taper_stop_lo_hz: float
+    taper_stop_hi_hz: float
+    fs_hz: float
+    test_s: float
+    min_window_s: float
+    min_rate_hz: float
+    max_gap_s: float
+    min_hand_score: float
+    zero_pad_factor: int
+    edge_trim_s: float
+    prom_halfwidth_hz: float
+    motion_band_hi_hz: float
+    moving_max_pct: float
+    min_prominence: float
+    noise_floor_pct: float
+
+    @model_validator(mode="after")
+    def _check(self) -> "Tremor":
+        errs = tremor_errors(self.model_dump())
+        if errs:
+            raise ValueError("; ".join(errs))
+        return self
+
+
 class Params(_M):
     version: int
     description: str
@@ -555,7 +607,7 @@ class Params(_M):
     hrv: Hrv
     rppg: Rppg
     breathing_signal: BandReserved
-    tremor: BandReserved
+    tremor: Tremor
     mobility: Mobility
     audio: Audio
 

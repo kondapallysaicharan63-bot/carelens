@@ -51,14 +51,15 @@
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "hrv" } }, "required": ["reported", "kind"] }, "then": { "required": ["rmssd_ms", "sdnn_ms"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "chair_stand_30s" } }, "required": ["reported", "kind"] }, "then": { "required": ["reps"] } },
         { "if": { "properties": { "reported": { "const": true }, "kind": { "enum": ["sit_to_stand_5x", "tug"] } }, "required": ["reported", "kind"] }, "then": { "required": ["time_s"] } },
-        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "walking_speed" } }, "required": ["reported", "kind"] }, "then": { "required": ["speed_m_s"] } }
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "walking_speed" } }, "required": ["reported", "kind"] }, "then": { "required": ["speed_m_s"] } },
+        { "if": { "properties": { "reported": { "const": true }, "kind": { "const": "hand_tremor" } }, "required": ["reported", "kind"] }, "then": { "required": ["freq_hz", "amp_pct"] } }
       ],
       "properties": {
         "t": { "type": "number", "minimum": 0, "description": "seconds since started_at when the result was produced" },
         "wall": { "type": "string" },
-        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed"], "description": "hrv (W6) or a W7 guided mobility test; wellbeing trends only" },
+        "kind": { "enum": ["hrv", "chair_stand_30s", "sit_to_stand_5x", "tug", "walking_speed", "hand_tremor"], "description": "hrv (W6), a W7 guided mobility test or the W8 rhythmic-hand-movement test; wellbeing trends only" },
         "reported": { "type": "boolean" },
-        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility)" },
+        "reason": { "type": "string", "maxLength": 40, "description": "ok | too_short | low_fps | unsteady | too_many_artifacts (hrv); out_of_view | not_seated_at_start | no_rise | no_turn | not_seated_at_end | incomplete | not_side_on | no_walk | too_short | bad_height (mobility); ok | no_hand | too_short | low_fps | moving | no_rhythm (hand_tremor)" },
         "rmssd_ms": { "type": "number", "minimum": 0 },
         "sdnn_ms": { "type": "number", "minimum": 0 },
         "mean_hr_bpm": { "type": "number", "exclusiveMinimum": 0 },
@@ -72,6 +73,9 @@
         "cadence_spm": { "type": "number", "exclusiveMinimum": 0, "description": "walking_speed: steps per minute" },
         "quality": { "type": "number", "minimum": 0, "maximum": 1, "description": "mobility tests: fraction of frames with visible legs" },
         "rep_times_s": { "type": "array", "maxItems": 100, "items": { "type": "number", "minimum": 0 }, "description": "chair_stand_30s: seconds from Go to each completed rep; sit_to_stand_5x: per-rep durations" },
+        "freq_hz": { "type": "number", "exclusiveMinimum": 0, "description": "hand_tremor: frequency (3-12 Hz) of the rhythmic hand movement" },
+        "amp_pct": { "type": "number", "minimum": 0, "description": "hand_tremor: RMS amplitude as % of hand size" },
+        "p2p_pct": { "type": "number", "minimum": 0, "description": "hand_tremor: peak-to-peak amplitude as % of hand size" },
         "phases_s": { "type": "object", "additionalProperties": false, "properties": { "rise": { "type": "number", "minimum": 0 }, "walk_out": { "type": "number", "minimum": 0 }, "turn_1": { "type": "number", "minimum": 0 }, "walk_back": { "type": "number", "minimum": 0 }, "turn_2": { "type": "number", "minimum": 0 }, "sit": { "type": "number", "minimum": 0 } }, "description": "tug: phase durations" }
       }
     },

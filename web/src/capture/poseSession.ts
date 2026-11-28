@@ -37,6 +37,7 @@ export class PoseSession {
   private handle: PoseHandle | null = null;
   private stopLoop: (() => void) | null = null;
   private ended = false;
+  private paused = false;
   private video: HTMLVideoElement | null = null;
   private clock = new FrameClock();
   private scheduler = new PoseScheduler(params.scheduling);
@@ -78,6 +79,13 @@ export class PoseSession {
     this.pipeline.setInactivitySeconds(s);
   }
 
+  /** Hold the frame loop (the hand test needs the whole CPU for its frame rate); resume() starts timing and detectors over. */
+  setPaused(p: boolean): void {
+    if (this.paused === p) return;
+    this.paused = p;
+    if (p) { this.stopLoop?.(); this.stopLoop = null; } else this.restart();
+  }
+
   /** Loads the model (async). If end() happened meanwhile, the model is closed immediately. */
   async load(loader: () => Promise<PoseHandle>, video: HTMLVideoElement): Promise<void> {
     this.video = video;
@@ -95,7 +103,7 @@ export class PoseSession {
   restart(): void {
     this.stopLoop?.();
     this.stopLoop = null;
-    if (this.ended || !this.handle || !this.video) return;
+    if (this.ended || this.paused || !this.handle || !this.video) return;
     this.clock.reset();
     this.scheduler.reset();
     this.pipeline = this.newPipeline();
@@ -118,7 +126,7 @@ export class PoseSession {
   }
 
   private onFrame(video: HTMLVideoElement, chest: ChestImageSource, now: number, meta?: FrameMeta): void {
-    if (this.ended || !this.handle || this.recreating || video.videoWidth === 0 || (video.readyState ?? 4) < 2) return;
+    if (this.ended || this.paused || !this.handle || this.recreating || video.videoWidth === 0 || (video.readyState ?? 4) < 2) return;
     try {
       if (this.process(video, chest, now, meta) && this.errors > 0) { this.errors = 0; this.hooks.onError?.(false); }
     } catch {
